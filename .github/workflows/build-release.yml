@@ -137,16 +137,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: token-manager-windows
+          path: release/
 
       - name: 下载macOS构建产物
         uses: actions/download-artifact@v4
         with:
           name: token-manager-macos
+          path: release/
 
       - name: 下载Linux构建产物
         uses: actions/download-artifact@v4
         with:
           name: token-manager-linux
+          path: release/
 
       # 创建GitHub Release并上传所有资产
       - name: 创建GitHub Release并上传资产
@@ -157,6 +160,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            ./token-manager-windows/token-manager.exe
-            ./token-manager-macos/token-manager
-            ./token-manager-linux/token-manager
+            release/token-manager-windows/token-manager.exe
+            release/token-manager-macos/token-manager
+            release/token-manager-linux/token-manager
