@@ -7,6 +7,10 @@ on:
     tags:
       - 'v*'
 
+# 权限设置
+permissions:
+  contents: write
+
 # 环境变量
 env:
   PYTHON_VERSION: '3.9'
@@ -41,7 +45,7 @@ jobs:
 
       # 上传构建产物
       - name: 上传Windows构建产物
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: token-manager-windows
           path: dist/token-manager.exe
@@ -66,15 +70,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
+          pip install Pillow
 
       # 构建macOS可执行文件
       - name: 构建macOS可执行文件
         run: |
-          pyinstaller --onefile --windowed --icon=icon.ico --name=token-manager main.py
+          pyinstaller --onefile --windowed --icon=icon.icns --name=token-manager main.py
 
       # 上传构建产物
       - name: 上传macOS构建产物
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: token-manager-macos
           path: dist/token-manager
@@ -113,7 +118,7 @@ jobs:
 
       # 上传构建产物
       - name: 上传Linux构建产物
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: token-manager-linux
           path: dist/token-manager
@@ -129,61 +134,29 @@ jobs:
 
       # 下载所有构建产物
       - name: 下载Windows构建产物
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: token-manager-windows
 
       - name: 下载macOS构建产物
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: token-manager-macos
 
       - name: 下载Linux构建产物
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: token-manager-linux
 
-      # 创建发布版本
-      - name: 创建GitHub Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # 创建GitHub Release并上传所有资产
+      - name: 创建GitHub Release并上传资产
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          name: Release ${{ github.ref }}
           draft: false
           prerelease: false
-
-      # 上传Windows可执行文件到Release
-      - name: 上传Windows可执行文件
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./token-manager.exe
-          asset_name: token-manager-windows.exe
-          asset_content_type: application/octet-stream
-
-      # 上传macOS可执行文件到Release
-      - name: 上传macOS可执行文件
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./token-manager
-          asset_name: token-manager-macos
-          asset_content_type: application/octet-stream
-
-      # 上传Linux可执行文件到Release
-      - name: 上传Linux可执行文件
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./token-manager
-          asset_name: token-manager-linux
-          asset_content_type: application/octet-stream
+          files: |
+            ./token-manager-windows/token-manager.exe
+            ./token-manager-macos/token-manager
+            ./token-manager-linux/token-manager
