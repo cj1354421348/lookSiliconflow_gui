@@ -157,6 +157,6 @@ jobs:
           draft: false
           prerelease: false
           files: |
-            ./token-manager-windows/dist/token-manager.exe
-            ./token-manager-macos/dist/token-manager
-            ./token-manager-linux/dist/token-manager
+            ./token-manager-windows/token-manager.exe
+            ./token-manager-macos/token-manager
+            ./token-manager-linux/token-manager
