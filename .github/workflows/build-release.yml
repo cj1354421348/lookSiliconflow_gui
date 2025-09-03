@@ -41,7 +41,7 @@ jobs:
       # 构建Windows可执行文件
       - name: 构建Windows可执行文件
         run: |
-          pyinstaller --onefile --windowed build.spec
+          pyinstaller build.spec
 
       # 上传构建产物
       - name: 上传Windows构建产物
@@ -75,7 +75,7 @@ jobs:
       # 构建macOS可执行文件
       - name: 构建macOS可执行文件
         run: |
-          pyinstaller --onefile --windowed build.spec
+          pyinstaller build.spec
 
       # 上传构建产物
       - name: 上传macOS构建产物
@@ -114,7 +114,7 @@ jobs:
       # 构建Linux可执行文件
       - name: 构建Linux可执行文件
         run: |
-          pyinstaller --onefile --windowed build.spec
+          pyinstaller build.spec
 
       # 上传构建产物
       - name: 上传Linux构建产物
