@@ -1,25 +1,40 @@
-# 工作流名称
 name: 构建和发布多平台可执行文件
 
-# 触发条件：仅在创建新标签时触发
 on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (例如: v1.0.0)'
+        required: true
   push:
     tags:
       - 'v*'
 
-# 权限设置
 permissions:
   contents: write
 
-# 环境变量
 env:
   PYTHON_VERSION: '3.9'
 
-# 作业定义
 jobs:
-  # 构建Windows版本
-  build-windows:
-    runs-on: windows-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            arch: x64
+            asset_name: token-manager-windows-x64.exe
+          - os: macos-latest
+            platform: macos
+            arch: x64
+            asset_name: token-manager-macos-x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+            asset_name: token-manager-linux-x64
+
+    runs-on: ${{ matrix.os }}
     steps:
       # 检出代码
       - name: 检出代码
@@ -31,101 +46,64 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # 安装依赖
-      - name: 安装依赖
+      # 安装依赖 (Windows)
+      - name: 安装Windows依赖
+        if: matrix.platform == 'windows'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pillow
 
-      # 构建Windows可执行文件
-      - name: 构建Windows可执行文件
-        run: |
-          pyinstaller --onefile --windowed --icon=icon.ico --name=token-manager main.py
-
-      # 上传构建产物
-      - name: 上传Windows构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: token-manager-windows
-          path: dist/token-manager.exe
-
-  # 构建macOS版本
-  build-macos:
-    runs-on: macos-latest
-    steps:
-      # 检出代码
-      - name: 检出代码
-        uses: actions/checkout@v3
-
-      # 设置Python环境
-      - name: 设置Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # 安装依赖
-      - name: 安装依赖
+      # 安装依赖 (macOS)
+      - name: 安装macOS依赖
+        if: matrix.platform == 'macos'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
-          pip install Pillow
+          pip install pyinstaller pillow
 
-      # 构建macOS可执行文件
-      - name: 构建macOS可执行文件
-        run: |
-          pyinstaller --onefile --windowed --icon=icon.icns --name=token-manager main.py
-
-      # 上传构建产物
-      - name: 上传macOS构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: token-manager-macos
-          path: dist/token-manager
-
-  # 构建Linux版本
-  build-linux:
-    runs-on: ubuntu-latest
-    steps:
-      # 检出代码
-      - name: 检出代码
-        uses: actions/checkout@v3
-
-      # 设置Python环境
-      - name: 设置Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      # 安装Linux系统依赖
-      - name: 安装系统依赖
+      # 安装依赖 (Linux)
+      - name: 安装Linux系统依赖
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y python3-tk
 
-      # 安装Python依赖
       - name: 安装Python依赖
+        if: matrix.platform == 'linux'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
-      # 构建Linux可执行文件
-      - name: 构建Linux可执行文件
+      # 构建可执行文件
+      - name: 构建Windows可执行文件
+        if: matrix.platform == 'windows'
         run: |
-          pyinstaller --onefile --windowed --name=token-manager main.py
+          pyinstaller --onefile --windowed main.spec
+          Rename-Item -Path "dist/token-manager.exe" -NewName "${{ matrix.asset_name }}"
+
+      - name: 构建macOS可执行文件
+        if: matrix.platform == 'macos'
+        run: |
+          pyinstaller --onefile --windowed main.spec
+          mv "dist/token-manager" "dist/${{ matrix.asset_name }}"
+
+      - name: 构建Linux可执行文件
+        if: matrix.platform == 'linux'
+        run: |
+          pyinstaller --onefile --windowed main.spec
+          mv "dist/token-manager" "dist/${{ matrix.asset_name }}"
 
       # 上传构建产物
-      - name: 上传Linux构建产物
+      - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          name: token-manager-linux
-          path: dist/token-manager
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.asset_name }}
 
-  # 创建发布版本
-  create-release:
-    needs: [build-windows, build-macos, build-linux]
+  release:
+    needs: build
     runs-on: ubuntu-latest
     steps:
       # 检出代码
@@ -136,27 +114,35 @@ jobs:
       - name: 下载Windows构建产物
         uses: actions/download-artifact@v4
         with:
-          name: token-manager-windows
+          name: token-manager-windows-x64.exe
+          path: release/
 
       - name: 下载macOS构建产物
         uses: actions/download-artifact@v4
         with:
-          name: token-manager-macos
+          name: token-manager-macos-x64
+          path: release/
 
       - name: 下载Linux构建产物
         uses: actions/download-artifact@v4
         with:
-          name: token-manager-linux
+          name: token-manager-linux-x64
+          path: release/
+
+      # 设置版本号
+      - name: 设置版本号
+        run: |
+          echo "RELEASE_VERSION=${{ github.event.inputs.version || github.ref_name }}" >> $GITHUB_ENV
 
       # 创建GitHub Release并上传所有资产
       - name: 创建GitHub Release并上传资产
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          name: Release ${{ github.ref }}
+          tag_name: ${{ env.RELEASE_VERSION }}
+          name: Release ${{ env.RELEASE_VERSION }}
           draft: false
           prerelease: false
           files: |
-            ./token-manager-windows/token-manager.exe
-            ./token-manager-macos/token-manager
-            ./token-manager-linux/token-manager
+            release/token-manager-windows-x64.exe
+            release/token-manager-macos-x64
+            release/token-manager-linux-x64
