@@ -80,19 +80,19 @@ jobs:
       - name: 构建Windows可执行文件
         if: matrix.platform == 'windows'
         run: |
-          pyinstaller --onefile --windowed main.spec
+          pyinstaller main.spec
           Rename-Item -Path "dist/token-manager.exe" -NewName "${{ matrix.asset_name }}"
 
       - name: 构建macOS可执行文件
         if: matrix.platform == 'macos'
         run: |
-          pyinstaller --onefile --windowed main.spec
+          pyinstaller main.spec
           mv "dist/token-manager" "dist/${{ matrix.asset_name }}"
 
       - name: 构建Linux可执行文件
         if: matrix.platform == 'linux'
         run: |
-          pyinstaller --onefile --windowed main.spec
+          pyinstaller main.spec
           mv "dist/token-manager" "dist/${{ matrix.asset_name }}"
 
       # 上传构建产物
