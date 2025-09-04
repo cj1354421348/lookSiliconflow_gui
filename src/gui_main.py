@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext
+from functools import partial
 import threading
 import os
 from typing import Dict, List, Optional
@@ -12,15 +13,22 @@ from config_manager import ConfigManager
 from token_query_service import TokenQueryService
 from settings_dialog import SettingsDialog
 from export_dialog import ExportDialog
+from log_manager import LogManager
 
 class TokenManagerGUI:
     """令牌管理系统GUI主界面"""
     
     def __init__(self):
+        # 初始化日志管理器
+        self.log_manager = LogManager(debug_mode=False)
+        
         # 初始化核心组件
         self.db_manager = DatabaseManager()
         self.config_manager = ConfigManager(self.db_manager)
-        self.query_service = TokenQueryService(self.db_manager, self.config_manager)
+        self.query_service = TokenQueryService(self.db_manager, self.config_manager, self.log_manager)
+        
+        # 存储令牌数据用于右键菜单
+        self.full_token_data = {}
         
         # 设置主窗口
         self.root = tk.Tk()
@@ -37,6 +45,11 @@ class TokenManagerGUI:
         # 启动自动刷新
         self.auto_refresh_enabled = self.config_manager.is_auto_refresh_enabled()
         self.refresh_interval = self.config_manager.get_refresh_interval()
+        
+        # 初始化调试模式
+        debug_enabled = self.config_manager.is_debug_mode_enabled()
+        self.log_manager.set_debug_mode(debug_enabled)
+        
         self.auto_refresh()
         
     def setup_window(self):
@@ -82,6 +95,9 @@ class TokenManagerGUI:
         
         # 创建日志区域
         self.create_log_section(main_frame)
+        
+        # 设置GUI日志回调
+        self.log_manager.set_gui_callback(self.log_message)
     
     def create_input_section(self, parent):
         """创建输入区域"""
@@ -129,6 +145,8 @@ class TokenManagerGUI:
         
         # 重新请求所有令牌数据按钮
         ttk.Button(control_frame, text="重新请求", command=self.requery_all_tokens).grid(row=0, column=6, padx=(10, 0))
+        
+        # 移除测试复制按钮
     
     def create_status_section(self, parent):
         """创建状态显示区域"""
@@ -182,6 +200,7 @@ class TokenManagerGUI:
         # 令牌树状视图
         columns = ("令牌", "余额", "充值余额", "最后检查")
         self.token_tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=15)
+        self.token_tree.configure(selectmode="extended")  # 单独设置多选模式
         
         # 设置列标题和点击事件
         for col in columns:
@@ -194,6 +213,9 @@ class TokenManagerGUI:
         
         self.token_tree.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=1, column=4, sticky=(tk.N, tk.S))
+        
+        # 绑定右键菜单事件
+        self.token_tree.bind("<Button-3>", self.show_context_menu)
     
     def create_log_section(self, parent):
         """创建日志区域"""
@@ -394,6 +416,14 @@ class TokenManagerGUI:
     
     def update_token_list(self):
         """更新令牌列表"""
+        # 保存当前选中的令牌值
+        selected_token_values = []
+        selected_items = self.token_tree.selection()
+        for item_id in selected_items:
+            if item_id in self.full_token_data:
+                token_data = self.full_token_data[item_id]
+                selected_token_values.append(token_data["token_value"])
+        
         # 清空现有列表
         for item in self.token_tree.get_children():
             self.token_tree.delete(item)
@@ -448,8 +478,14 @@ class TokenManagerGUI:
 
         tokens.sort(key=get_sort_key, reverse=self._sort_direction)
         
+        # 清空完整令牌数据存储
+        self.full_token_data.clear()
+        
+        # 创建映射以查找新的item_id
+        new_item_ids = []
+        
         # 添加到列表
-        for token in tokens[:100]:  # 限制显示数量
+        for token in tokens:  # 显示所有令牌
             token_value = token["token_value"]
             if len(token_value) > 20:
                 display_token = token_value[:10] + "..." + token_value[-7:]
@@ -460,9 +496,24 @@ class TokenManagerGUI:
             charge_balance = token.get("charge_balance", "-")
             last_checked = token.get("last_checked", "-") or "未检查"
             
-            self.token_tree.insert("", tk.END, values=(
+            item_id = self.token_tree.insert("", tk.END, values=(
                 display_token, balance, charge_balance, last_checked[:19] if last_checked != "-" else "-"
             ))
+            
+            # 存储完整令牌数据
+            self.full_token_data[item_id] = token
+            
+            # 如果这个令牌是之前选中的，记录新的item_id
+            if token_value in selected_token_values:
+                new_item_ids.append(item_id)
+        
+        # 恢复选中状态
+        for item_id in new_item_ids:
+            self.token_tree.selection_add(item_id)
+        
+        # 如果有恢复的选中项，滚动到第一个选中项
+        if new_item_ids:
+            self.token_tree.see(new_item_ids[0])
     
     def filter_tokens(self, event=None):
         """筛选令牌"""
@@ -477,22 +528,137 @@ class TokenManagerGUI:
             self._sort_direction = False  # 默认为降序
         
         self.update_token_list()
+    
+    def show_context_menu(self, event):
+        """显示右键菜单"""
+        # 只依赖左键选中的项
+        selected_items = self.token_tree.selection()
+        
+        # 调试信息
+        self.log_manager.log_debug(f"右键调试: selected_items={selected_items}")
+        
+        # 只有在有左键选中的令牌时才显示菜单
+        if selected_items:
+            self.log_manager.log_debug("显示菜单：检测到左键选中项")
+            
+            # 创建右键菜单
+            context_menu = tk.Menu(self.root, tearoff=0)
+            
+            # 使用第一个选中的令牌作为右键菜单的操作目标
+            target_item = selected_items[0]
+            if target_item in self.full_token_data:
+                # 添加复制令牌选项
+                context_menu.add_command(label="复制完整令牌", command=lambda: self.copy_full_token(target_item))
+                context_menu.add_command(label="复制显示令牌", command=lambda: self.copy_display_token(target_item))
+                
+                # 添加分隔线
+                context_menu.add_separator()
+                
+                # 添加复制状态选项
+                context_menu.add_command(label="复制令牌状态", command=lambda: self.copy_token_status(target_item))
+                
+                # 添加多选支持
+                if len(selected_items) > 1:
+                    context_menu.add_separator()
+                    context_menu.add_command(label="复制所有选中令牌", command=self.copy_selected_tokens)
+                
+                # 显示菜单
+                context_menu.post(event.x_root, event.y_root)
+            else:
+                self.log_manager.log_debug(f"选中的项 {target_item} 不在 full_token_data 中")
+        else:
+            self.log_manager.log_debug("不显示菜单：没有左键选中的令牌")
+    
+    def copy_full_token(self, item):
+        """复制完整令牌到剪贴板"""
+        try:
+            if item and item in self.full_token_data:
+                token_data = self.full_token_data[item]
+                full_token = token_data["token_value"]
+                
+                self.root.clipboard_clear()
+                self.root.clipboard_append(full_token)
+                self.log_manager.log_user("已复制完整令牌到剪贴板")
+        except Exception as e:
+            self.log_manager.log_error(f"复制完整令牌失败: {e}")
+    
+    def copy_display_token(self, item):
+        """复制显示令牌到剪贴板"""
+        try:
+            if item:
+                values = self.token_tree.item(item)['values']
+                display_token = values[0]  # 第一列是显示的令牌
+                
+                self.root.clipboard_clear()
+                self.root.clipboard_append(display_token)
+                self.log_manager.log_user("已复制显示令牌到剪贴板")
+        except Exception as e:
+            self.log_manager.log_error(f"复制显示令牌失败: {e}")
+    
+    def copy_token_status(self, item):
+        """复制令牌状态信息到剪贴板"""
+        try:
+            if item and item in self.full_token_data:
+                token_data = self.full_token_data[item]
+                token_value = token_data["token_value"]
+                status = token_data["status"]
+                total_balance = token_data.get("total_balance", "未知")
+                charge_balance = token_data.get("charge_balance", "未知")
+                
+                info = f"令牌: {token_value}\n状态: {status}\n余额: {total_balance}\n充值余额: {charge_balance}"
+                
+                self.root.clipboard_clear()
+                self.root.clipboard_append(info)
+                self.log_manager.log_user("已复制令牌状态信息到剪贴板")
+        except Exception as e:
+            self.log_manager.log_error(f"复制令牌状态信息失败: {e}")
 
+    def copy_selected_tokens(self):
+        """复制所有选中的令牌到剪贴板"""
+        try:
+            selected_items = self.token_tree.selection()
+            
+            if not selected_items:
+                self.log_manager.log_user("没有选中的令牌")
+                return
+            
+            tokens_to_copy = []
+            for item in selected_items:
+                if item in self.full_token_data:
+                    token_data = self.full_token_data[item]
+                    tokens_to_copy.append(token_data["token_value"])
+            
+            if tokens_to_copy:
+                # 用换行符连接所有令牌
+                tokens_text = "\n".join(tokens_to_copy)
+                
+                self.root.clipboard_clear()
+                self.root.clipboard_append(tokens_text)
+                
+                self.log_manager.log_user(f"已复制 {len(tokens_to_copy)} 个选中令牌到剪贴板")
+            else:
+                self.log_manager.log_user("没有有效的令牌可复制")
+        except Exception as e:
+            self.log_manager.log_error(f"复制选中令牌失败: {e}")
+    
+        
     def export_tokens(self):
         """导出令牌"""
         try:
             export_dialog = ExportDialog(self.root, self.db_manager, self.config_manager)
             if export_dialog.show():
-                self.log_message("令牌导出完成")
+                self.log_manager.log_user("令牌导出完成")
                 self.refresh_data()
         except Exception as e:
+            self.log_manager.log_error(f"打开导出对话框失败: {e}")
             messagebox.showerror("错误", f"打开导出对话框失败: {e}")
     
     def cleanup_tokens(self):
         """清理令牌"""
         try:
-            # 创建清理对话框
+            # 创建清理对话框，先隐藏
             cleanup_window = tk.Toplevel(self.root)
+            cleanup_window.withdraw()  # 隐藏窗口，直到完全准备好
             cleanup_window.title("清理令牌")
             cleanup_window.geometry("400x300")
             cleanup_window.minsize(350, 250)
@@ -550,7 +716,7 @@ class TokenManagerGUI:
                         total_deleted += deleted
                     
                     messagebox.showinfo("完成", f"已清理 {total_deleted} 个令牌")
-                    self.log_message(f"已清理 {total_deleted} 个令牌")
+                    self.log_manager.log_user(f"已清理 {total_deleted} 个令牌")
                     self.refresh_data()
                     cleanup_window.destroy()
             
@@ -567,20 +733,34 @@ class TokenManagerGUI:
             y = (cleanup_window.winfo_screenheight() // 2) - (height // 2)
             cleanup_window.geometry(f'{width}x{height}+{x}+{y}')
             
+            # 现在显示窗口
+            cleanup_window.deiconify()
+            
         except Exception as e:
             messagebox.showerror("错误", f"打开清理对话框失败: {e}")
     
     def open_settings(self):
         """打开设置对话框"""
         try:
-            settings_dialog = SettingsDialog(self.root, self.config_manager)
+            settings_dialog = SettingsDialog(self.root, self.config_manager, self.log_manager)
             if settings_dialog.show():
-                self.log_message("设置已保存")
+                self.log_manager.log_user("设置已保存")
                 # 如果设置变了，可能需要更新界面
                 self.auto_refresh_enabled = self.config_manager.is_auto_refresh_enabled()
                 self.refresh_interval = self.config_manager.get_refresh_interval()
+                # 更新调试模式
+                debug_enabled = self.config_manager.is_debug_mode_enabled()
+                self.log_manager.set_debug_mode(debug_enabled)
+                if debug_enabled:
+                    log_path = self.log_manager.get_log_file_path()
+                    self.log_manager.log_user(f"调试模式已启用，日志文件: {log_path}")
+                else:
+                    self.log_manager.log_user("调试模式已禁用")
         except Exception as e:
+            self.log_manager.log_error(f"打开设置对话框失败: {e}")
             messagebox.showerror("错误", f"打开设置对话框失败: {e}")
+    
+    # 调试模式已在初始化时从配置管理器加载
     
     def requery_all_tokens(self):
         """重新请求所有令牌数据"""
@@ -602,9 +782,8 @@ class TokenManagerGUI:
         threading.Thread(target=requery_async, daemon=True).start()
     
     def log_message(self, message):
-        """添加日志消息"""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self.log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        """添加日志消息到GUI（仅用于用户级别消息）"""
+        self.log_text.insert(tk.END, f"{message}\n")
         self.log_text.see(tk.END)
     
     def clear_log(self):
