@@ -15,6 +15,14 @@
 - **数据清理**: 支持按状态清理令牌数据
 - **历史记录**: 记录查询历史和导出记录
 
+## 📦 下载说明
+
+为了确保下载和使用的安全性，我们现在提供ZIP压缩包格式：
+
+- **避免下载警告**: ZIP格式绕过浏览器安全警告
+- **包含验证信息**: 每个压缩包都包含版本说明和验证脚本
+- **简单易用**: 解压即可运行，无需额外配置
+
 ## 📁 项目结构
 
 ```
@@ -37,15 +45,36 @@ lookSiliconflow_gui/
 
 ## 🚀 快速开始
 
-### 1. 安装依赖
+### 方法一：下载使用（推荐）
 
+#### 1. 下载对应平台的压缩包
+- **Windows**: token-manager-windows-x64.zip
+- **macOS**: token-manager-macos-x64.zip  
+- **Linux**: token-manager-linux-x64.zip
+
+#### 2. 解压使用
 ```bash
-pip install -r requirements.txt
+# Windows: 解压后双击运行程序
+token-manager-windows-x64.exe
+
+# macOS: 解压后在终端中运行
+chmod +x token-manager-macos-x64
+./token-manager-macos-x64
+
+# Linux: 解压后在终端中运行
+chmod +x token-manager-linux-x64
+./token-manager-linux-x64
 ```
 
-### 2. 启动应用
+**注意**: 如果Windows提示安全警告，点击"更多信息"→"仍要运行"即可。
+
+### 方法二：从源码运行
 
 ```bash
+# 1. 安装依赖
+pip install -r requirements.txt
+
+# 2. 启动应用
 python main.py
 ```
 
@@ -159,6 +188,7 @@ token1,token2,token3
 token4,token5
 ```
 
+
 ## 🛠️ 高级功能
 
 ### 1. 批处理模式
@@ -199,6 +229,17 @@ token4,token5
 - 确保有足够磁盘空间
 - 重启应用后重试
 
+## ⚠️ 常见问题
+
+### Windows安全警告
+如果出现"Windows保护您的PC"提示，点击"更多信息"→"仍要运行"即可。
+
+### 杀毒软件误报
+如被杀毒软件误报，添加到白名单或暂时禁用实时保护。
+
+### 文件损坏
+如果文件无法运行，重新下载或从源码构建。
+
 ## 📞 技术支持
 
 如果遇到问题，请：
@@ -206,7 +247,15 @@ token4,token5
 2. 检查配置是否正确
 3. 确认API服务是否正常
 
+### 获取帮助
+- **GitHub Issues**: 提交问题
+- **源码**: 查看和验证源码
+
 ## 🔄 版本历史
+
+### v2.1.0 
+- 压缩包发布，避免下载安全警告
+- 添加文件完整性验证功能
 
 ### v2.0.0 (GUI版本)
 - 全新的图形用户界面

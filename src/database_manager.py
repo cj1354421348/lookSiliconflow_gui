@@ -132,10 +132,12 @@ class DatabaseManager:
             else:
                 value_json = str(value)
             
+            # 获取本地时区时间
+            local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute("""
                 INSERT OR REPLACE INTO config (key, value, updated_at)
-                VALUES (?, ?, CURRENT_TIMESTAMP)
-            """, (key, value_json))
+                VALUES (?, ?, ?)
+            """, (key, value_json, local_time))
             conn.commit()
     
     # 令牌管理方法
@@ -183,14 +185,17 @@ class DatabaseManager:
     
     def update_token_status(self, token_id: int, status: str, total_balance: float = None, charge_balance: float = None):
         """更新令牌状态和余额"""
+        # 获取本地时区时间
+        local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE tokens 
                 SET status = ?, total_balance = ?, charge_balance = ?, 
-                    updated_at = CURRENT_TIMESTAMP, last_checked = CURRENT_TIMESTAMP
+                    updated_at = ?, last_checked = ?
                 WHERE id = ?
-            """, (status, total_balance, charge_balance, token_id))
+            """, (status, total_balance, charge_balance, local_time, local_time, token_id))
             conn.commit()
     
     def get_tokens_by_status(self, status: str) -> List[Dict]:
@@ -312,20 +317,23 @@ class DatabaseManager:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             
+            # 获取本地时区时间
+            local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
             if processed_tokens is not None:
                 cursor.execute("""
                     UPDATE batches 
                     SET status = ?, processed_tokens = ?, 
-                        completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+                        completed_at = CASE WHEN ? = 'completed' THEN ? ELSE NULL END
                     WHERE id = ?
-                """, (status, processed_tokens, status, batch_id))
+                """, (status, processed_tokens, status, local_time, batch_id))
             else:
                 cursor.execute("""
                     UPDATE batches 
                     SET status = ?, 
-                        completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE NULL END
+                        completed_at = CASE WHEN ? = 'completed' THEN ? ELSE NULL END
                     WHERE id = ?
-                """, (status, status, batch_id))
+                """, (status, status, local_time, batch_id))
             
             conn.commit()
     

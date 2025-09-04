@@ -320,6 +320,10 @@ class TokenManagerGUI:
     
     def start_processing(self):
         """开始处理令牌"""
+        # 显示开始处理提示
+        self.processing_status_label.config(text="开始处理...", foreground="blue")
+        self.log_manager.log_user("开始处理待处理令牌")
+        
         def process_async():
             self.process_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
@@ -340,13 +344,24 @@ class TokenManagerGUI:
         self.process_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         
+        # 显示处理结束提示
         if result["success"]:
+            self.processing_status_label.config(text="处理完成", foreground="green")
+            self.log_manager.log_user(f"处理完成: 总计 {result.get('processed_count', 0)} 个令牌")
             messagebox.showinfo("处理完成", 
                 f"处理完成: 总计 {result.get('processed_count', 0)} 个令牌")
         else:
+            self.processing_status_label.config(text="处理失败", foreground="red")
+            self.log_manager.log_user(f"处理失败: {result['message']}")
             messagebox.showerror("处理失败", result["message"])
         
         self.refresh_data()
+        
+        # 3秒后重置状态为"就绪"
+        def reset_status():
+            self.processing_status_label.config(text="就绪", foreground="green")
+        
+        self.root.after(3000, reset_status)
     
     def update_requery_result(self, result):
         """更新重新请求结果"""
@@ -358,13 +373,24 @@ class TokenManagerGUI:
         successful_count = sum(1 for r in result if isinstance(r, dict) and r.get("success")) if isinstance(result, list) else 0
         failed_count = processed_count - successful_count
         
+        # 显示重新请求结束提示
         if processed_count > 0:
+            self.processing_status_label.config(text="重新请求完成", foreground="green")
+            self.log_manager.log_user(f"重新请求完成: 总计 {processed_count} 个令牌，成功 {successful_count} 个，失败 {failed_count} 个")
             messagebox.showinfo("重新请求完成", 
                 f"重新请求完成: 总计 {processed_count} 个令牌，成功 {successful_count} 个，失败 {failed_count} 个")
         else:
+            self.processing_status_label.config(text="无需重新请求", foreground="green")
+            self.log_manager.log_user("没有令牌需要重新请求")
             messagebox.showinfo("重新请求完成", "没有令牌需要重新请求")
         
         self.refresh_data()
+        
+        # 3秒后重置状态为"就绪"
+        def reset_requery_status():
+            self.processing_status_label.config(text="就绪", foreground="green")
+        
+        self.root.after(3000, reset_requery_status)
     
     def refresh_data(self):
         """刷新数据显示"""
@@ -764,6 +790,10 @@ class TokenManagerGUI:
     
     def requery_all_tokens(self):
         """重新请求所有令牌数据"""
+        # 显示重新请求开始提示
+        self.processing_status_label.config(text="重新请求中...", foreground="blue")
+        self.log_manager.log_user("开始重新请求所有令牌数据")
+        
         def requery_async():
             self.process_button.config(state=tk.DISABLED)
             self.stop_button.config(state=tk.NORMAL)
