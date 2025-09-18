@@ -190,12 +190,19 @@ class TokenManagerGUI:
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(1, weight=1)  # 修改为第1行（令牌树状视图所在行）具有权重
         
-        # 状态选择
+        # 状态选择和搜索
         ttk.Label(list_frame, text="状态筛选:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.status_filter = ttk.Combobox(list_frame, values=["全部", "pending", "valid", "low_balance", "charge_balance", "invalid"])
+        self.status_filter = ttk.Combobox(list_frame, values=["全部", "pending", "valid", "low_balance", "charge_balance", "invalid"], width=15)
         self.status_filter.set("全部")
-        self.status_filter.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0, 10))
+        self.status_filter.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
         self.status_filter.bind("<<ComboboxSelected>>", self.filter_tokens)
+
+        # 搜索框
+        ttk.Label(list_frame, text="搜索:").grid(row=0, column=2, sticky=tk.W, padx=(0, 5))
+        self.search_var = tk.StringVar()
+        self.search_var.trace('w', self.on_search_change)  # 监听输入变化
+        self.search_entry = ttk.Entry(list_frame, textvariable=self.search_var, width=20)
+        self.search_entry.grid(row=0, column=3, sticky=(tk.W, tk.E), padx=(0, 10))
         
         # 令牌树状视图
         columns = ("令牌", "余额", "充值余额", "最后检查")
@@ -211,8 +218,8 @@ class TokenManagerGUI:
         scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.token_tree.yview)
         self.token_tree.configure(yscrollcommand=scrollbar.set)
         
-        self.token_tree.grid(row=1, column=0, columnspan=4, sticky=(tk.W, tk.E, tk.N, tk.S))
-        scrollbar.grid(row=1, column=4, sticky=(tk.N, tk.S))
+        self.token_tree.grid(row=1, column=0, columnspan=5, sticky=(tk.W, tk.E, tk.N, tk.S))
+        scrollbar.grid(row=1, column=5, sticky=(tk.N, tk.S))
         
         # 绑定右键菜单事件
         self.token_tree.bind("<Button-3>", self.show_context_menu)
@@ -456,7 +463,8 @@ class TokenManagerGUI:
         
         # 获取筛选条件
         selected_status = self.status_filter.get()
-        
+        search_keyword = self.search_var.get().strip().lower()
+
         # 获取令牌数据
         if selected_status == "全部":
             tokens = []
@@ -464,6 +472,16 @@ class TokenManagerGUI:
                 tokens.extend(self.db_manager.get_tokens_by_status(status))
         else:
             tokens = self.db_manager.get_tokens_by_status(selected_status)
+
+        # 搜索过滤
+        if search_keyword:
+            filtered_tokens = []
+            for token in tokens:
+                token_value = token.get("token_value", "").lower()
+                # 在令牌值中搜索关键词
+                if search_keyword in token_value:
+                    filtered_tokens.append(token)
+            tokens = filtered_tokens
         
         # 根据排序选项排序
         sort_column_map = {
@@ -513,10 +531,8 @@ class TokenManagerGUI:
         # 添加到列表
         for token in tokens:  # 显示所有令牌
             token_value = token["token_value"]
-            if len(token_value) > 20:
-                display_token = token_value[:10] + "..." + token_value[-7:]
-            else:
-                display_token = token_value
+            # 完整显示令牌，不显示省略号
+            display_token = token_value
             
             balance = token.get("total_balance", "-")
             charge_balance = token.get("charge_balance", "-")
@@ -543,6 +559,10 @@ class TokenManagerGUI:
     
     def filter_tokens(self, event=None):
         """筛选令牌"""
+        self.update_token_list()
+
+    def on_search_change(self, *args):
+        """搜索框内容变化时的处理"""
         self.update_token_list()
     
     def sort_by_column(self, col):
