@@ -9,7 +9,9 @@ token-manager/
 │   ├── database_manager.py       # 数据库管理 (14KB)
 │   ├── config_manager.py         # 配置管理 (8KB)
 │   ├── export_dialog.py          # 导出对话框 (16KB)
-│   └── settings_dialog.py        # 设置对话框 (15KB)
+│   ├── settings_dialog.py        # 设置对话框 (15KB)
+│   ├── proxy_server.py           # API代理服务器
+│   └── proxy_settings_dialog.py  # 代理设置对话框
 ├── database/                     # 数据库目录
 │   └── token_manager.db         # SQLite数据库文件 (45KB)
 ├── requirements.txt              # Python依赖包列表
@@ -31,6 +33,15 @@ token-manager/
 - 状态栏和控制面板
 - 日志显示区域
 - 所有UI事件处理
+- 代理服务器控制集成
+- 代理状态实时显示
+
+### API代理服务器 (`src/proxy_server.py`)
+- 轻量级HTTP代理服务器（基于Flask）
+- 密钥轮询和负载均衡算法
+- 自动故障检测和恢复机制
+- 请求日志和统计信息
+- 多线程安全的密钥池管理
 
 ### 令牌查询服务 (`src/token_query_service.py`)
 - SiliconFlow API请求处理
@@ -48,10 +59,12 @@ token-manager/
 - JSON配置文件读写
 - 应用设置管理
 - 窗口大小和刷新间隔配置
+- 代理服务器配置管理
 
 ### 对话框模块
 - **导出对话框** (`src/export_dialog.py`): 令牌导出功能
 - **设置对话框** (`src/settings_dialog.py`): 应用配置界面
+- **代理设置对话框** (`src/proxy_settings_dialog.py`): 代理服务器配置界面
 
 ## 资源文件
 
