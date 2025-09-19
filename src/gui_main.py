@@ -14,6 +14,7 @@ from token_query_service import TokenQueryService
 from settings_dialog import SettingsDialog
 from export_dialog import ExportDialog
 from proxy_settings_dialog import ProxySettingsDialog
+from proxy_logs_dialog import ProxyLogsDialog
 from log_manager import LogManager
 
 # 延迟导入代理服务器，避免Flask依赖问题
@@ -97,7 +98,10 @@ class TokenManagerGUI:
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
+        # 令牌列表区域需要可扩展（第2行）
         main_frame.rowconfigure(2, weight=1)
+        # 日志区域也需要可扩展（第3行）
+        main_frame.rowconfigure(3, weight=1)
         
         # 创建输入区域
         self.create_input_section(main_frame)
@@ -141,57 +145,61 @@ class TokenManagerGUI:
         """创建控制面板"""
         control_frame = ttk.LabelFrame(parent, text="控制面板", padding="10")
         control_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=(0, 10))
-        
-        # 处理按钮
-        self.process_button = ttk.Button(control_frame, text="开始处理", command=self.start_processing)
-        self.process_button.grid(row=0, column=0, padx=(0, 10))
-        
-        self.stop_button = ttk.Button(control_frame, text="停止处理", command=self.stop_processing, state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, padx=(0, 10))
-        
-        # 刷新按钮
-        ttk.Button(control_frame, text="刷新", command=self.refresh_data).grid(row=0, column=2, padx=(0, 10))
-        
-        # 导出按钮
-        ttk.Button(control_frame, text="导出", command=self.export_tokens).grid(row=0, column=3, padx=(0, 10))
-        
-        # 清理按钮
-        ttk.Button(control_frame, text="清理", command=self.cleanup_tokens).grid(row=0, column=4, padx=(0, 10))
-        
-        # 设置按钮
-        ttk.Button(control_frame, text="设置", command=self.open_settings).grid(row=0, column=5)
-        
-        # 重新请求所有令牌数据按钮
-        ttk.Button(control_frame, text="重新请求", command=self.requery_all_tokens).grid(row=0, column=6, padx=(10, 0))
 
-        # 代理设置按钮（如果代理服务器可用）
+        # 配置控制面板的网格权重，支持响应式布局
+        control_frame.columnconfigure(0, weight=1)
+
+        # 创建主控制按钮框架（第一行）
+        main_control_frame = ttk.Frame(control_frame)
+        main_control_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=(0, 5))
+
+        # 基础控制按钮（始终显示）
+        self.process_button = ttk.Button(main_control_frame, text="开始处理", command=self.start_processing)
+        self.process_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        self.stop_button = ttk.Button(main_control_frame, text="停止处理", command=self.stop_processing, state=tk.DISABLED)
+        self.stop_button.pack(side=tk.LEFT, padx=(0, 5))
+
+        ttk.Button(main_control_frame, text="刷新", command=self.refresh_data).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(main_control_frame, text="导出", command=self.export_tokens).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(main_control_frame, text="清理", command=self.cleanup_tokens).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(main_control_frame, text="设置", command=self.open_settings).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(main_control_frame, text="重新请求", command=self.requery_all_tokens).pack(side=tk.LEFT, padx=(0, 5))
+
+        # 创建代理控制框架（第二行）
         if PROXY_SERVER_AVAILABLE:
+            proxy_frame = ttk.Frame(control_frame)
+            proxy_frame.grid(row=1, column=0, sticky=(tk.W, tk.E))
+
             # 代理启用/禁用复选框
             self.proxy_enabled_var = tk.BooleanVar(value=self.config_manager.is_proxy_enabled())
             ttk.Checkbutton(
-                control_frame,
+                proxy_frame,
                 text="启用代理",
                 variable=self.proxy_enabled_var,
                 command=self.on_proxy_enabled_changed
-            ).grid(row=0, column=7, padx=(10, 0))
+            ).pack(side=tk.LEFT, padx=(0, 10))
 
             # 代理控制按钮
-            self.proxy_button = ttk.Button(control_frame, text="启动代理", command=self.toggle_proxy_server)
-            self.proxy_button.grid(row=0, column=8, padx=(10, 0))
+            self.proxy_button = ttk.Button(proxy_frame, text="启动代理", command=self.toggle_proxy_server)
+            self.proxy_button.pack(side=tk.LEFT, padx=(0, 10))
 
             # 检查代理服务器实际运行状态并更新按钮文本
             if hasattr(self, 'proxy_server') and self.proxy_server and self.proxy_server.is_running:
                 self.proxy_button.config(text="停止代理")
 
             # 代理设置按钮
-            ttk.Button(control_frame, text="代理设置", command=self.open_proxy_settings).grid(row=0, column=9, padx=(10, 0))
+            ttk.Button(proxy_frame, text="代理设置", command=self.open_proxy_settings).pack(side=tk.LEFT, padx=(0, 10))
+
+            # 代理日志按钮
+            ttk.Button(proxy_frame, text="代理日志", command=self.open_proxy_logs).pack(side=tk.LEFT, padx=(0, 10))
 
         # 移除测试复制按钮
     
     def create_status_section(self, parent):
         """创建状态显示区域"""
         status_frame = ttk.LabelFrame(parent, text="状态概览", padding="10")
-        status_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=(0, 10))
+        status_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N), padx=(0, 10))
         
         # 统计标签
         self.status_labels = {}
@@ -1127,6 +1135,19 @@ class TokenManagerGUI:
             # 如果禁用了代理且服务器正在运行，则停止服务器
             elif not settings['enabled'] and self.proxy_server and self.proxy_server.is_running:
                 self.stop_proxy_server()
+
+    def open_proxy_logs(self):
+        """打开代理日志对话框"""
+        if not PROXY_SERVER_AVAILABLE:
+            messagebox.showwarning("功能不可用", "代理功能不可用")
+            return
+
+        try:
+            dialog = ProxyLogsDialog(self, self.db_manager)
+            dialog.show()
+        except Exception as e:
+            self.log_message(f"打开代理日志失败: {e}")
+            messagebox.showerror("错误", f"打开代理日志失败: {e}")
     
     def run(self):
         """启动GUI"""

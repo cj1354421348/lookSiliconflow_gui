@@ -351,8 +351,10 @@ class RequestLog:
     def log_request(self, key_id: int, endpoint: str, method: str,
                    status_code: int, duration: float, success: bool,
                    error_message: str = "", retry_count: int = 0,
-                   retry_type: str = "initial"):
-        """记录增强的请求日志"""
+                   retry_type: str = "initial", model: str = None,
+                   response_type: str = "普通响应", request_data: str = None,
+                   response_size: int = None, token_value: str = None):
+        """记录增强的请求日志（控制台 + 数据库）"""
         try:
             # 获取key的详细状态信息
             key_usage_stats = self.key_pool.get_key_usage_stats(key_id)
@@ -376,7 +378,7 @@ class RequestLog:
             else:
                 usage_summary = "未知"
 
-            # 构建详细的日志数据
+            # 构建详细的日志数据（控制台输出）
             log_data = {
                 "key_id": key_id,
                 "key_status": key_status_info,
@@ -388,7 +390,7 @@ class RequestLog:
                 "duration_ms": int(duration * 1000),
                 "success": success,
                 "retry_count": retry_count,
-                "retry_type": retry_type,  # initial, small_retry, big_retry
+                "retry_type": retry_type,
                 "error_message": error_message,
                 "timestamp": datetime.now().isoformat()
             }
@@ -410,8 +412,38 @@ class RequestLog:
             if error_message:
                 log_message += f" | 错误:{error_message[:100]}..." if len(error_message) > 100 else f" | 错误:{error_message}"
 
-            # 记录到日志
+            # 记录到控制台日志
             self.logger.info(log_message)
+
+            # 记录到数据库
+            try:
+                # 确定状态文本
+                if success:
+                    status_text = "成功"
+                elif retry_count > 0 and retry_type == "initial":
+                    status_text = "请求中"  # 如果是第一次失败但会重试，算作请求中
+                else:
+                    status_text = "失败"
+
+                # 记录到数据库
+                self.db_manager.add_proxy_request_log(
+                    key_id=key_id,
+                    token_value=token_value or f"Key[{key_id}]",
+                    endpoint=endpoint,
+                    method=method,
+                    status=status_text,
+                    response_type=response_type,
+                    status_code=status_code,
+                    duration_ms=int(duration * 1000),
+                    model=model,
+                    error_message=error_message,
+                    retry_count=retry_count,
+                    retry_type=retry_type,
+                    request_data=request_data,
+                    response_size=response_size
+                )
+            except Exception as db_error:
+                self.logger.error(f"记录数据库日志失败: {db_error}")
 
             # 如果失败率较高，发出警告
             if key_usage_stats and not success:
@@ -537,6 +569,34 @@ class ProxyServer:
             # 解析异常，记录并返回原始错误
             self.logger.error(f"解析API错误信息时发生异常: {e}")
             return f"{{{status_code}: 解析失败 - {response_text[:200] if response_text else '空响应'}}}"
+
+    def _extract_model_info(self, request_data: bytes) -> str:
+        """从请求数据中提取模型信息"""
+        try:
+            if request_data:
+                # 尝试解析JSON数据
+                data_str = request_data.decode('utf-8')
+                try:
+                    data_json = json.loads(data_str)
+                    return data_json.get('model', '未知模型')
+                except json.JSONDecodeError:
+                    return '非JSON请求'
+            return None
+        except Exception:
+            return None
+
+    def _detect_response_type(self, request_data: bytes) -> str:
+        """检测响应类型（流式或普通）"""
+        try:
+            if request_data:
+                data_str = request_data.decode('utf-8')
+                data_json = json.loads(data_str)
+                # 检查是否有stream参数
+                if data_json.get('stream', False):
+                    return '流式响应'
+            return '普通响应'
+        except Exception:
+            return '普通响应'
 
     def _setup_logger(self) -> logging.Logger:
         """设置日志记录器"""
@@ -680,6 +740,13 @@ class ProxyServer:
 
         self.logger.info(f"重试配置: 小重试{max_small_retries}次, 大重试{max_big_retries}次, 最大总尝试次数{max_total_attempts}次")
 
+        # 初始化变量用于日志记录
+        current_key_id = None
+        current_key_value = None
+        current_model = None
+        current_response_type = None
+        current_request_data = None
+
         # 智能重试循环
         while retry_count <= max_total_attempts:
             retry_count += 1
@@ -707,8 +774,10 @@ class ProxyServer:
                 self.logger.error("没有可用的API密钥")
                 return jsonify({"error": "No available API keys"}), 503
 
-            key_id = api_key['id']
-            key_value = api_key['token_value']
+            current_key_id = api_key['id']
+            current_key_value = api_key['token_value']
+            key_id = current_key_id
+            key_value = current_key_value
 
             # 构建目标URL（使用SiliconFlow API）
             target_url = f"https://api.siliconflow.cn/v1/{path}"
@@ -724,6 +793,14 @@ class ProxyServer:
             # 获取请求数据
             method = request.method
             data = request.get_data()
+
+            # 提取额外信息用于日志记录
+            current_model = self._extract_model_info(data)
+            current_response_type = self._detect_response_type(data)
+            current_request_data = data.decode('utf-8', errors='ignore')[:500] if data else None
+            model = current_model
+            response_type = current_response_type
+            request_data_str = current_request_data
 
             # 只显示API密钥的前12位，保护密钥安全
             key_display = key_value[:12] if len(key_value) > 12 else key_value
@@ -770,7 +847,12 @@ class ProxyServer:
                     method=method,
                     status_code=response.status_code,
                     duration=duration,
-                    success=True
+                    success=True,
+                    model=model,
+                    response_type=response_type,
+                    request_data=request_data_str,
+                    response_size=len(response.content) if response.content else None,
+                    token_value=key_value
                 )
 
                 # 只显示API密钥的前12位，保护密钥安全
@@ -820,12 +902,12 @@ class ProxyServer:
         self.logger.error(error_msg)
 
         # 记录最终失败
-        if 'key_id' in locals():
+        if current_key_id:
             last_api_key = getattr(self.key_pool, 'last_used_key', None)
-            retry_type = "initial" if retry_count == 1 else ("small_retry" if last_api_key and 'id' in last_api_key and last_api_key['id'] == key_id else "big_retry")
+            retry_type = "initial" if retry_count == 1 else ("small_retry" if last_api_key and 'id' in last_api_key and last_api_key['id'] == current_key_id else "big_retry")
 
             self.request_log.log_request(
-                key_id=key_id,
+                key_id=current_key_id,
                 endpoint=target_url if 'target_url' in locals() else "unknown",
                 method=method if 'method' in locals() else "unknown",
                 status_code=500,
@@ -833,7 +915,11 @@ class ProxyServer:
                 success=False,
                 error_message=error_msg,
                 retry_count=retry_count - 1,
-                retry_type=retry_type
+                retry_type=retry_type,
+                model=current_model,
+                response_type=current_response_type,
+                request_data=current_request_data,
+                token_value=current_key_value
             )
 
         return jsonify({
