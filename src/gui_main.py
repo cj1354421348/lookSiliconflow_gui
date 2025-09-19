@@ -36,7 +36,18 @@ class TokenManagerGUI:
         self.config_manager = ConfigManager(self.db_manager)
         self.query_service = TokenQueryService(self.db_manager, self.config_manager, self.log_manager)
 
-        # 初始化代理服务器（如果可用）
+        # 存储令牌数据用于右键菜单
+        self.full_token_data = {}
+
+        # 设置主窗口
+        self.root = tk.Tk()
+        self.root.title("令牌管理系统 v2.0")
+        self.setup_window()
+
+        # 创建界面组件
+        self.create_widgets()
+
+        # 初始化代理服务器（如果可用）- 移到GUI创建之后
         self.proxy_server = None
         if PROXY_SERVER_AVAILABLE:
             try:
@@ -46,17 +57,6 @@ class TokenManagerGUI:
                     self.start_proxy_server()
             except Exception as e:
                 self.log_message(f"初始化代理服务器失败: {e}")
-        
-        # 存储令牌数据用于右键菜单
-        self.full_token_data = {}
-        
-        # 设置主窗口
-        self.root = tk.Tk()
-        self.root.title("令牌管理系统 v2.0")
-        self.setup_window()
-        
-        # 创建界面组件
-        self.create_widgets()
         
         # 排序状态
         self._sort_column = "最后检查"  # 默认按最后检查时间排序
@@ -69,8 +69,6 @@ class TokenManagerGUI:
         # 初始化调试模式
         debug_enabled = self.config_manager.is_debug_mode_enabled()
         self.log_manager.set_debug_mode(debug_enabled)
-        
-        self.auto_refresh()
         
     def setup_window(self):
         """设置窗口属性"""
@@ -182,7 +180,7 @@ class TokenManagerGUI:
             self.proxy_button.grid(row=0, column=8, padx=(10, 0))
 
             # 检查代理服务器实际运行状态并更新按钮文本
-            if self.proxy_server and self.proxy_server.is_running:
+            if hasattr(self, 'proxy_server') and self.proxy_server and self.proxy_server.is_running:
                 self.proxy_button.config(text="停止代理")
 
             # 代理设置按钮
@@ -496,7 +494,7 @@ class TokenManagerGUI:
         self.total_charge_balance_label.config(text=f"{total_charge_balance:.2f}")
 
         # 更新代理状态显示（如果代理服务器可用）
-        if PROXY_SERVER_AVAILABLE and hasattr(self, 'proxy_status_label') and self.proxy_server:
+        if PROXY_SERVER_AVAILABLE and hasattr(self, 'proxy_status_label') and hasattr(self, 'proxy_server') and self.proxy_server:
             if self.proxy_server.is_running:
                 self.proxy_status_label.config(text="运行中", foreground="green")
             else:
@@ -888,12 +886,18 @@ class TokenManagerGUI:
     
     def log_message(self, message):
         """添加日志消息到GUI（仅用于用户级别消息）"""
-        self.log_text.insert(tk.END, f"{message}\n")
-        self.log_text.see(tk.END)
+        if hasattr(self, 'log_text') and self.log_text:
+            # 如果GUI组件已创建，使用GUI显示日志
+            self.log_text.insert(tk.END, f"{message}\n")
+            self.log_text.see(tk.END)
+        else:
+            # 如果GUI组件还未创建，使用控制台输出
+            print(f"[GUI日志] {message}")
     
     def clear_log(self):
         """清空日志"""
-        self.log_text.delete("1.0", tk.END)
+        if hasattr(self, 'log_text') and self.log_text:
+            self.log_text.delete("1.0", tk.END)
     
     def auto_refresh(self):
         """自动刷新"""
@@ -1127,6 +1131,8 @@ class TokenManagerGUI:
     def run(self):
         """启动GUI"""
         self.refresh_data()
+        # 启动自动刷新（在组件完全初始化后）
+        self.auto_refresh()
         self.root.mainloop()
 
 def main():
