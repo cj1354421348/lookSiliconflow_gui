@@ -37,6 +37,17 @@ class ConfigManager:
             "export": {
                 "default_directory": "exports",
                 "filename_template": "{status}_tokens_{date}.txt"
+            },
+            "proxy": {
+                "port": 8080,
+                "timeout": 30,
+                "max_failures": 3,
+                "enabled": False,
+                "pool_type": "non_blacklist",
+                "key_debounce_interval": 600,
+                "max_small_retries": 3,
+                "max_big_retries": 5,
+                "request_timeout_minutes": 15
             }
         }
     
@@ -153,6 +164,105 @@ class ConfigManager:
             
         except Exception as e:
             print(f"配置迁移失败: {e}")
+
+    # 代理配置方法
+    def get_proxy_port(self) -> int:
+        """获取代理端口"""
+        return self.get("proxy.port", self.default_config["proxy"]["port"])
+
+    def get_proxy_timeout(self) -> int:
+        """获取代理超时时间"""
+        return self.get("proxy.timeout", self.default_config["proxy"]["timeout"])
+
+    def get_proxy_max_failures(self) -> int:
+        """获取密钥最大失败次数"""
+        return self.get("proxy.max_failures", self.default_config["proxy"]["max_failures"])
+
+    def is_proxy_enabled(self) -> bool:
+        """是否启用代理"""
+        return self.get("proxy.enabled", self.default_config["proxy"]["enabled"])
+
+    def set_proxy_enabled(self, enabled: bool):
+        """设置代理启用状态"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["enabled"] = enabled
+        self.set("proxy", proxy_config)
+
+    def set_proxy_port(self, port: int):
+        """设置代理端口"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["port"] = port
+        self.set("proxy", proxy_config)
+
+    def set_proxy_timeout(self, timeout: int):
+        """设置代理超时时间"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["timeout"] = timeout
+        self.set("proxy", proxy_config)
+
+    def set_proxy_max_failures(self, max_failures: int):
+        """设置密钥最大失败次数"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["max_failures"] = max_failures
+        self.set("proxy", proxy_config)
+
+    def get_proxy_pool_type(self) -> str:
+        """获取代理密钥池类型"""
+        return self.get("proxy.pool_type", self.default_config["proxy"]["pool_type"])
+
+    def set_proxy_pool_type(self, pool_type: str):
+        """设置代理密钥池类型"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["pool_type"] = pool_type
+        self.set("proxy", proxy_config)
+
+    def get_proxy_key_debounce_interval(self) -> int:
+        """获取代理密钥防抖间隔（秒）"""
+        return self.get("proxy.key_debounce_interval", self.default_config["proxy"]["key_debounce_interval"])
+
+    def set_proxy_key_debounce_interval(self, interval: int):
+        """设置代理密钥防抖间隔（秒）"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["key_debounce_interval"] = interval
+        self.set("proxy", proxy_config)
+
+    def get_proxy_max_small_retries(self) -> int:
+        """获取代理小重试最大次数"""
+        return self.get("proxy.max_small_retries", self.default_config["proxy"]["max_small_retries"])
+
+    def set_proxy_max_small_retries(self, max_retries: int):
+        """设置代理小重试最大次数"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["max_small_retries"] = max_retries
+        self.set("proxy", proxy_config)
+
+    def get_proxy_max_big_retries(self) -> int:
+        """获取代理大重试最大次数"""
+        return self.get("proxy.max_big_retries", self.default_config["proxy"]["max_big_retries"])
+
+    def set_proxy_max_big_retries(self, max_retries: int):
+        """设置代理大重试最大次数"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["max_big_retries"] = max_retries
+        self.set("proxy", proxy_config)
+
+    def get_proxy_request_timeout_minutes(self) -> int:
+        """获取代理请求超时时间（分钟）"""
+        return self.get("proxy.request_timeout_minutes", self.default_config["proxy"]["request_timeout_minutes"])
+
+    def set_proxy_request_timeout_minutes(self, timeout_minutes: int):
+        """设置代理请求超时时间（分钟）"""
+        proxy_config = self.get("proxy", self.default_config["proxy"])
+        proxy_config["request_timeout_minutes"] = timeout_minutes
+        self.set("proxy", proxy_config)
+
+    def get_proxy_max_total_retries(self) -> int:
+        """计算代理总重试次数（小重试 * 大重试）"""
+        small_retries = self.get_proxy_max_small_retries()
+        big_retries = self.get_proxy_max_big_retries()
+        return small_retries + (big_retries * (small_retries + 1))
+        # 计算逻辑：(小重试次数 + 1) * 大重试次数
+        # +1是因为第一次正常请求不算重试，后续每次大重试最多可以有小重试次数+1次尝试
     
     def export_to_file(self, config_file_path: str):
         """导出配置到文件"""
@@ -180,6 +290,17 @@ class ConfigManager:
             "export": {
                 "default_directory": self.get_export_directory(),
                 "filename_template": self.get_filename_template()
+            },
+            "proxy": {
+                "port": self.get_proxy_port(),
+                "timeout": self.get_proxy_timeout(),
+                "max_failures": self.get_proxy_max_failures(),
+                "enabled": self.is_proxy_enabled(),
+                "pool_type": self.get_proxy_pool_type(),
+                "key_debounce_interval": self.get_proxy_key_debounce_interval(),
+                "max_small_retries": self.get_proxy_max_small_retries(),
+                "max_big_retries": self.get_proxy_max_big_retries(),
+                "request_timeout_minutes": self.get_proxy_request_timeout_minutes()
             }
         }
         

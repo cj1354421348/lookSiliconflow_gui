@@ -13,7 +13,16 @@ from config_manager import ConfigManager
 from token_query_service import TokenQueryService
 from settings_dialog import SettingsDialog
 from export_dialog import ExportDialog
+from proxy_settings_dialog import ProxySettingsDialog
 from log_manager import LogManager
+
+# 延迟导入代理服务器，避免Flask依赖问题
+try:
+    from proxy_server import ProxyServer
+    PROXY_SERVER_AVAILABLE = True
+except ImportError:
+    PROXY_SERVER_AVAILABLE = False
+    ProxyServer = None
 
 class TokenManagerGUI:
     """令牌管理系统GUI主界面"""
@@ -26,6 +35,17 @@ class TokenManagerGUI:
         self.db_manager = DatabaseManager()
         self.config_manager = ConfigManager(self.db_manager)
         self.query_service = TokenQueryService(self.db_manager, self.config_manager, self.log_manager)
+
+        # 初始化代理服务器（如果可用）
+        self.proxy_server = None
+        if PROXY_SERVER_AVAILABLE:
+            try:
+                self.proxy_server = ProxyServer(self.db_manager, self.config_manager)
+                # 如果配置中启用了代理，启动代理服务器
+                if self.config_manager.is_proxy_enabled():
+                    self.start_proxy_server()
+            except Exception as e:
+                self.log_message(f"初始化代理服务器失败: {e}")
         
         # 存储令牌数据用于右键菜单
         self.full_token_data = {}
@@ -145,7 +165,29 @@ class TokenManagerGUI:
         
         # 重新请求所有令牌数据按钮
         ttk.Button(control_frame, text="重新请求", command=self.requery_all_tokens).grid(row=0, column=6, padx=(10, 0))
-        
+
+        # 代理设置按钮（如果代理服务器可用）
+        if PROXY_SERVER_AVAILABLE:
+            # 代理启用/禁用复选框
+            self.proxy_enabled_var = tk.BooleanVar(value=self.config_manager.is_proxy_enabled())
+            ttk.Checkbutton(
+                control_frame,
+                text="启用代理",
+                variable=self.proxy_enabled_var,
+                command=self.on_proxy_enabled_changed
+            ).grid(row=0, column=7, padx=(10, 0))
+
+            # 代理控制按钮
+            self.proxy_button = ttk.Button(control_frame, text="启动代理", command=self.toggle_proxy_server)
+            self.proxy_button.grid(row=0, column=8, padx=(10, 0))
+
+            # 检查代理服务器实际运行状态并更新按钮文本
+            if self.proxy_server and self.proxy_server.is_running:
+                self.proxy_button.config(text="停止代理")
+
+            # 代理设置按钮
+            ttk.Button(control_frame, text="代理设置", command=self.open_proxy_settings).grid(row=0, column=9, padx=(10, 0))
+
         # 移除测试复制按钮
     
     def create_status_section(self, parent):
@@ -178,6 +220,12 @@ class TokenManagerGUI:
         ttk.Label(status_frame, text="充值余额总计:").grid(row=(len(labels)+1)//2, column=2, sticky=tk.W, padx=(0, 5), pady=2)
         self.total_charge_balance_label = ttk.Label(status_frame, text="0.00", font=("Arial", 10, "bold"))
         self.total_charge_balance_label.grid(row=(len(labels)+1)//2, column=3, sticky=tk.W, padx=(0, 20), pady=2)
+
+        # 代理状态（如果代理服务器可用）
+        if PROXY_SERVER_AVAILABLE:
+            ttk.Label(status_frame, text="代理状态:").grid(row=(len(labels)+2)//2, column=0, sticky=tk.W, padx=(0, 5), pady=(10, 2))
+            self.proxy_status_label = ttk.Label(status_frame, text="未启动", font=("Arial", 10, "bold"))
+            self.proxy_status_label.grid(row=(len(labels)+2)//2, column=1, sticky=tk.W, padx=(0, 20), pady=(10, 2))
         
         # 处理状态
         self.processing_status_label = ttk.Label(status_frame, text="就绪", foreground="green")
@@ -446,6 +494,13 @@ class TokenManagerGUI:
         # 更新余额总计和充值余额总计显示
         self.total_balance_label.config(text=f"{total_balance:.2f}")
         self.total_charge_balance_label.config(text=f"{total_charge_balance:.2f}")
+
+        # 更新代理状态显示（如果代理服务器可用）
+        if PROXY_SERVER_AVAILABLE and hasattr(self, 'proxy_status_label') and self.proxy_server:
+            if self.proxy_server.is_running:
+                self.proxy_status_label.config(text="运行中", foreground="green")
+            else:
+                self.proxy_status_label.config(text="已停止", foreground="red")
     
     def update_token_list(self):
         """更新令牌列表"""
@@ -935,8 +990,139 @@ class TokenManagerGUI:
     
     def on_window_close(self):
         """窗口关闭事件处理"""
+        # 停止代理服务器
+        if self.proxy_server and hasattr(self.proxy_server, 'is_running') and self.proxy_server.is_running:
+            self.proxy_server.stop()
+
         # 保存窗口大小和位置
         self.root.destroy()
+
+    # 代理服务器相关方法
+    def start_proxy_server(self):
+        """启动代理服务器"""
+        if not PROXY_SERVER_AVAILABLE or not self.proxy_server:
+            self.log_message("代理服务器不可用，请安装Flask依赖")
+            return False
+
+        if self.proxy_server.is_running:
+            self.log_message("代理服务器已在运行中")
+            return True
+
+        port = self.config_manager.get_proxy_port()
+        success = self.proxy_server.start(port)
+
+        if success:
+            self.log_message(f"代理服务器已启动，监听端口 {port}")
+            if hasattr(self, 'proxy_button'):
+                self.proxy_button.config(text="停止代理")
+            if hasattr(self, 'proxy_enabled_var'):
+                self.proxy_enabled_var.set(True)
+            return True
+        else:
+            self.log_message("启动代理服务器失败")
+            return False
+
+    def stop_proxy_server(self):
+        """停止代理服务器"""
+        if self.proxy_server and self.proxy_server.is_running:
+            self.proxy_server.stop()
+            self.log_message("代理服务器已停止")
+            if hasattr(self, 'proxy_button'):
+                self.proxy_button.config(text="启动代理")
+            if hasattr(self, 'proxy_enabled_var'):
+                self.proxy_enabled_var.set(False)
+            return True
+        return False
+
+    def on_proxy_enabled_changed(self):
+        """代理启用/禁用复选框状态变化处理"""
+        enabled = self.proxy_enabled_var.get()
+
+        # 保存配置
+        self.config_manager.set_proxy_enabled(enabled)
+
+        if enabled:
+            # 启用代理 - 如果服务器未运行则启动
+            if self.proxy_server and not self.proxy_server.is_running:
+                self.start_proxy_server()
+            self.log_message("代理已启用")
+        else:
+            # 禁用代理 - 如果服务器正在运行则停止
+            if self.proxy_server and self.proxy_server.is_running:
+                self.stop_proxy_server()
+            self.log_message("代理已禁用")
+
+    def toggle_proxy_server(self):
+        """切换代理服务器状态"""
+        if not PROXY_SERVER_AVAILABLE or not self.proxy_server:
+            self.log_message("代理服务器不可用，请安装Flask依赖")
+            return
+
+        if self.proxy_server.is_running:
+            self.stop_proxy_server()
+        else:
+            self.start_proxy_server()
+
+        # 确保复选框状态与实际运行状态同步
+        if hasattr(self, 'proxy_enabled_var'):
+            self.proxy_enabled_var.set(self.proxy_server.is_running)
+
+    def open_proxy_settings(self):
+        """打开代理设置对话框"""
+        if not PROXY_SERVER_AVAILABLE:
+            messagebox.showwarning("功能不可用", "请先安装Flask依赖包: pip install flask")
+            return
+
+        dialog = ProxySettingsDialog(self, self.config_manager)
+        settings = dialog.show()
+
+        if settings:
+            # 应用所有基础设置
+            self.config_manager.set_proxy_enabled(settings['enabled'])
+            self.config_manager.set_proxy_port(settings['port'])
+            self.config_manager.set_proxy_timeout(settings['timeout'])
+            self.config_manager.set_proxy_max_failures(settings['max_failures'])
+
+            # 应用密钥池和重试设置
+            self.config_manager.set_proxy_pool_type(settings['pool_type'])
+            self.config_manager.set_proxy_key_debounce_interval(settings['key_debounce_interval'])
+            self.config_manager.set_proxy_max_small_retries(settings['max_small_retries'])
+            self.config_manager.set_proxy_max_big_retries(settings['max_big_retries'])
+            self.config_manager.set_proxy_request_timeout_minutes(settings['request_timeout_minutes'])
+
+            # 配置已经通过各个setter方法自动保存到数据库
+
+            # 更新UI复选框状态
+            if hasattr(self, 'proxy_enabled_var'):
+                self.proxy_enabled_var.set(settings['enabled'])
+
+            # 更新代理服务器的密钥池设置（如果服务器存在）
+            if self.proxy_server and hasattr(self.proxy_server, 'key_pool'):
+                key_pool = self.proxy_server.key_pool
+
+                # 更新池子类型
+                key_pool.set_pool_type(settings['pool_type'])
+
+                # 更新所有防抖和重试参数
+                key_pool.key_debounce_interval = settings['key_debounce_interval']
+                key_pool.max_small_retries = settings['max_small_retries']
+                key_pool.max_big_retries = settings['max_big_retries']
+
+                # 更新代理服务器端口设置
+                self.proxy_server.port = settings['port']
+
+                # 记录设置更新
+                self.log_message(f"代理设置已更新: 池子类型={settings['pool_type']}, "
+                              f"防抖时间={settings['key_debounce_interval']}s, "
+                              f"小重试次数={settings['max_small_retries']}, "
+                              f"大重试次数={settings['max_big_retries']}")
+
+            # 如果启用了代理且服务器未运行，则启动服务器
+            if settings['enabled'] and self.proxy_server and not self.proxy_server.is_running:
+                self.start_proxy_server()
+            # 如果禁用了代理且服务器正在运行，则停止服务器
+            elif not settings['enabled'] and self.proxy_server and self.proxy_server.is_running:
+                self.stop_proxy_server()
     
     def run(self):
         """启动GUI"""
