@@ -285,14 +285,20 @@ class ProxyLogsDialog:
 
         # 添加新数据
         for log in logs:
-            # 格式化时间
+            # 格式化时间 - 使用系统本地时间
             timestamp = log.get('request_timestamp', '')
             if timestamp:
                 try:
-                    dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                    # 直接解析为本地时间，不带时区转换
+                    if timestamp.endswith('Z'):
+                        # 如果是UTC时间，转换为本地时间显示
+                        dt = datetime.fromisoformat(timestamp[:-1]).astimezone()
+                    else:
+                        # 已经是有时区信息的时间，直接使用
+                        dt = datetime.fromisoformat(timestamp)
                     time_str = dt.strftime("%m-%d %H:%M:%S")
                 except:
-                    time_str = timestamp[:16]
+                    time_str = timestamp[:16] if len(timestamp) >= 16 else timestamp
             else:
                 time_str = "-"
 
@@ -508,8 +514,24 @@ class ProxyLogsDialog:
 
                 writer.writeheader()
                 for log in logs_data:
+                    # 格式化时间显示
+                    timestamp = log['request_timestamp']
+                    formatted_time = timestamp
+                    if timestamp:
+                        try:
+                            # 直接解析为本地时间，不带时区转换
+                            if timestamp.endswith('Z'):
+                                # 如果是UTC时间，转换为本地时间显示
+                                dt = datetime.fromisoformat(timestamp[:-1]).astimezone()
+                            else:
+                                # 已经是有时区信息的时间，直接使用
+                                dt = datetime.fromisoformat(timestamp)
+                            formatted_time = dt.strftime("%Y-%m-%d %H:%M:%S")
+                        except:
+                            formatted_time = timestamp[:19] if len(timestamp) >= 19 else timestamp
+
                     writer.writerow({
-                        '时间': log['request_timestamp'],
+                        '时间': formatted_time,
                         '状态': log['status'],
                         '响应类型': log['response_type'],
                         '状态码': log['status_code'],

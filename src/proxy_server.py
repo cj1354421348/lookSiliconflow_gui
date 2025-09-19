@@ -392,7 +392,7 @@ class RequestLog:
                 "retry_count": retry_count,
                 "retry_type": retry_type,
                 "error_message": error_message,
-                "timestamp": datetime.now().isoformat()
+                "timestamp": datetime.now().astimezone().isoformat()
             }
 
             # 构建易于阅读的日志消息
@@ -682,7 +682,7 @@ class ProxyServer:
         def health_check():
             return jsonify({
                 "status": "healthy",
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now().astimezone().isoformat(),
                 "stats": self.get_stats()
             })
 
