@@ -41,7 +41,13 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+
+
 
       # 设置Python环境
       - name: 设置Python ${{ env.PYTHON_VERSION }}
@@ -49,23 +55,35 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      # 安装依赖 (Windows)
-      - name: 安装Windows依赖
-        if: matrix.platform == 'windows'
+      # 统一安装依赖 (所有平台)
+      - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pillow
+          
+
+
+
+
+
+
+      # 安装项目依赖（与上面的统一安装重复，这里保留执行一次）
+      - name: 安装项目依赖
+        run: |
+          python -m pip install --upgrade pip
+
+
           pip install -r requirements.txt
           pip install pyinstaller pillow
 
-      # 安装依赖 (macOS)
-      - name: 安装macOS依赖
-        if: matrix.platform == 'macos'
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip install pyinstaller pillow
+
+
+
+
 
       # 安装依赖 (Linux)
+      # 安装Linux系统依赖
       - name: 安装Linux系统依赖
         if: matrix.platform == 'linux'
         run: |
@@ -78,6 +96,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller pillow
+
+
+
+
+
+
+
+
+
+
+
+
+
+      # 清理旧构建产物，避免使用旧代码生成的产物
+      - name: 清理旧构建产物
+        shell: pwsh
+        run: |
+          if (Test-Path dist) { Remove-Item -Recurse -Force dist }
+          if (Test-Path build) { Remove-Item -Recurse -Force build }
 
       # 构建可执行文件
       - name: 构建Windows可执行文件
@@ -116,24 +153,31 @@ jobs:
 
       - name: 创建ZIP压缩包（避免下载警告）
         if: matrix.platform == 'windows'
+        shell: pwsh
         run: |
-          mkdir release-package
-          mv "dist/${{ matrix.asset_name }}" "release-package/"
-          mv "dist/sign-verify.bat" "release-package/"
-          echo "Token Manager v${{ github.event.inputs.version || github.ref_name }}" > "release-package/说明.txt"
-          echo "GitHub: https://github.com/${{ github.repository }}" >> "release-package/说明.txt"
-          echo "开源项目，已通过开源签名工具验证" >> "release-package/说明.txt"
-          echo "" >> "release-package/说明.txt"
-          echo "使用说明：" >> "release-package/说明.txt"
-          echo "1. 解压此ZIP文件到任意目录" >> "release-package/说明.txt"
-          echo "2. 双击运行 token-manager-windows-x64.exe" >> "release-package/说明.txt"
-          echo "3. 如遇SmartScreen提示，点击'更多信息'→'仍要运行'" >> "release-package/说明.txt"
-          echo "" >> "release-package/说明.txt"
-          echo "版本信息：" >> "release-package/说明.txt"
-          echo "构建时间: $(Get-Date -UFormat '+%Y-%m-%d %H:%M:%S UTC')" >> "release-package/说明.txt"
-          echo "Git Commit: ${{ github.sha }}" >> "release-package/说明.txt"
-          # 使用PowerShell创建ZIP压缩包（直接包含文件，避免嵌套文件夹）
-          cd release-package && Compress-Archive -Path "*" -DestinationPath "../${{ matrix.zip_name }}" -Force
+          $root = (Get-Location).Path
+          $pkg = Join-Path $root 'release-package'
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Move-Item -Path "dist/${{ matrix.asset_name }}" -Destination $pkg
+          Move-Item -Path "dist/sign-verify.bat" -Destination $pkg
+
+          $notes = Join-Path $pkg '说明.txt'
+          Set-Content -Path $notes -Value "Token Manager v${{ github.event.inputs.version || github.ref_name }}"
+          Add-Content -Path $notes -Value "GitHub: https://github.com/${{ github.repository }}"
+          Add-Content -Path $notes -Value "开源项目，已通过开源签名工具验证"
+          Add-Content -Path $notes -Value ""
+          Add-Content -Path $notes -Value "使用说明："
+          Add-Content -Path $notes -Value "1. 解压此ZIP文件到任意目录"
+          Add-Content -Path $notes -Value "2. 双击运行 token-manager-windows-x64.exe"
+          Add-Content -Path $notes -Value "3. 如遇SmartScreen提示，点击'更多信息'→'仍要运行'"
+          Add-Content -Path $notes -Value ""
+          Add-Content -Path $notes -Value "版本信息："
+          Add-Content -Path $notes -Value "Git Commit: ${{ github.sha }}"
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd HH:mm:ss UTC')
+          Add-Content -Path $notes -Value "构建时间: $date"
+
+          $zipPath = Join-Path $root "${{ matrix.zip_name }}"
+          Compress-Archive -Path (Join-Path $pkg '*') -DestinationPath $zipPath -Force
 
       # macOS 版本：创建压缩包
       - name: 创建macOS压缩包
@@ -187,7 +231,12 @@ jobs:
     steps:
       # 检出代码
       - name: 检出代码
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+
+
 
       # 下载所有ZIP压缩包
       - name: 下载Windows ZIP包

@@ -1,2 +1,4 @@
 requests>=2.25.0
 Flask>=2.0.0
+Werkzeug>=2.0.0
+pillow>=8.0.0
