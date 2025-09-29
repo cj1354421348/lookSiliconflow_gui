@@ -153,13 +153,51 @@ class TokenQueryService:
                 "error": str(e)
             }
     
+    def _remove_duplicate_tokens(self):
+        """清理数据库中的重复令牌记录"""
+        try:
+            # 获取所有令牌
+            all_tokens = self.db_manager.get_all_tokens()
+            
+            # 使用字典来跟踪每个令牌值的ID
+            token_dict = {}
+            duplicates = []
+            
+            for token in all_tokens:
+                token_value = token['token_value']
+                token_id = token['id']
+                
+                if token_value in token_dict:
+                    # 发现重复令牌，保留ID较小的记录
+                    if token_id > token_dict[token_value]:
+                        duplicates.append(token_id)
+                    else:
+                        duplicates.append(token_dict[token_value])
+                        token_dict[token_value] = token_id
+                else:
+                    token_dict[token_value] = token_id
+            
+            # 删除重复记录
+            for duplicate_id in duplicates:
+                self.db_manager.delete_token_by_id(duplicate_id)
+            
+            if duplicates:
+                self.logger.info(f"清理了 {len(duplicates)} 个重复的令牌记录")
+        except Exception as e:
+            self.logger.error(f"清理重复令牌时出错: {e}")
+    
     def process_tokens_single_threaded(self, tokens: List[Dict]) -> List[Dict]:
         """单线程处理令牌"""
         results = []
+        processed_token_ids = set()
         
         for token in tokens:
-            result = self.process_single_token(token['id'], token['token_value'])
-            results.append(result)
+            token_id = token['id']
+            # 避免重复处理同一令牌
+            if token_id not in processed_token_ids:
+                result = self.process_single_token(token_id, token['token_value'])
+                results.append(result)
+                processed_token_ids.add(token_id)
             
         return results
     
@@ -168,9 +206,19 @@ class TokenQueryService:
         max_workers = self.config_manager.get_max_workers()
         batch_size = self.config_manager.get_batch_size()
         
+        # 去重处理
+        unique_tokens = []
+        processed_token_ids = set()
+        
+        for token in tokens:
+            token_id = token['id']
+            if token_id not in processed_token_ids:
+                unique_tokens.append(token)
+                processed_token_ids.add(token_id)
+        
         results = []
         processed_count = 0
-        total_count = len(tokens)
+        total_count = len(unique_tokens)
         
         if self.log_manager:
             self.log_manager.log_process(f"开始多线程处理：共 {total_count} 个令牌，使用 {max_workers} 个线程")
@@ -181,7 +229,7 @@ class TokenQueryService:
             # 提交所有任务
             future_to_token = {
                 executor.submit(self.process_single_token, token['id'], token['token_value']): token
-                for token in tokens
+                for token in unique_tokens
             }
             
             # 收集结果
@@ -233,6 +281,9 @@ class TokenQueryService:
             else:
                 self.logger.info("开始处理待处理的令牌")
             
+            # 清理数据库中的重复记录
+            self._remove_duplicate_tokens()
+            
             # 获取待处理的令牌 (无数量限制)
             pending_tokens = self.db_manager.get_pending_tokens(limit=1000000)
             
@@ -249,14 +300,23 @@ class TokenQueryService:
             else:
                 results = self.process_tokens_single_threaded(pending_tokens)
             
-            # 统计结果
-            processed_count = len(results)
-            successful_count = sum(1 for r in results if r["success"])
+            # 统计结果（去重处理）
+            unique_token_ids = set()
+            unique_results = []
+            
+            for result in results:
+                token_id = result["token_id"]
+                if token_id not in unique_token_ids:
+                    unique_token_ids.add(token_id)
+                    unique_results.append(result)
+            
+            processed_count = len(unique_results)
+            successful_count = sum(1 for r in unique_results if r["success"])
             failed_count = processed_count - successful_count
             
             # 按状态统计
             status_counts = {}
-            for result in results:
+            for result in unique_results:
                 status = result["status"]
                 status_counts[status] = status_counts.get(status, 0) + 1
             

@@ -6,12 +6,16 @@ import os
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
 from pathlib import Path
+from src.constants import (
+    DatabaseConstants, TokenStatus, ProxyRequestStatus,
+    ResponseType, RetryType, TimeConstants
+)
 
 class DatabaseManager:
     """数据库管理器 - 统一管理所有数据库操作"""
     
-    def __init__(self, db_path: str = "database/token_manager.db"):
-        self.db_path = db_path
+    def __init__(self, db_path: str = None):
+        self.db_path = db_path or DatabaseConstants.DEFAULT_DB_PATH
         self.logger = self._setup_logger()
         self._ensure_database_exists()
         
@@ -52,8 +56,8 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             # 配置表 - 存储系统配置
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS config (
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {DatabaseConstants.CONFIG_TABLE} (
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -61,12 +65,14 @@ class DatabaseManager:
             """)
             
             # 令牌表 - 存储所有令牌信息
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tokens (
+            valid_statuses = ["'" + status + "'" for status in TokenStatus.VALID_STATUSES]
+            status_check = f"status IN ({', '.join(valid_statuses)})"
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {DatabaseConstants.TOKENS_TABLE} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     token_hash TEXT UNIQUE NOT NULL,
                     token_value TEXT NOT NULL,
-                    status TEXT NOT NULL CHECK(status IN ('pending', 'valid', 'low_balance', 'invalid', 'charge_balance')),
+                    status TEXT NOT NULL CHECK({status_check}),
                     total_balance REAL,
                     charge_balance REAL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -76,8 +82,8 @@ class DatabaseManager:
             """)
             
             # 批次表 - 存储查询批次信息
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS batches (
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {DatabaseConstants.BATCHES_TABLE} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     batch_name TEXT NOT NULL,
                     total_tokens INTEGER NOT NULL,
@@ -90,8 +96,8 @@ class DatabaseManager:
             """)
             
             # 结果导出表 - 存储导出记录
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS exports (
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {DatabaseConstants.EXPORTS_TABLE} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     filter_criteria TEXT,
                     token_count INTEGER NOT NULL,
@@ -102,35 +108,39 @@ class DatabaseManager:
             """)
 
             # 代理请求日志表 - 存储代理服务器请求记录
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS proxy_request_logs (
+            proxy_statuses = ["'" + status + "'" for status in [ProxyRequestStatus.PENDING, ProxyRequestStatus.SUCCESS, ProxyRequestStatus.FAILED]]
+            status_check = f"status IN ({', '.join(proxy_statuses)})"
+            response_types = ["'" + rtype + "'" for rtype in [ResponseType.STREAMING, ResponseType.NORMAL]]
+            response_type_check = f"response_type IN ({', '.join(response_types)})"
+            cursor.execute(f"""
+                CREATE TABLE IF NOT EXISTS {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE} (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     key_id INTEGER NOT NULL,
                     token_value TEXT NOT NULL,
                     endpoint TEXT NOT NULL,
                     method TEXT NOT NULL,
                     model TEXT,
-                    status TEXT NOT NULL CHECK(status IN ('请求中', '成功', '失败')),
-                    response_type TEXT DEFAULT '普通响应' CHECK(response_type IN ('流式响应', '普通响应')),
+                    status TEXT NOT NULL CHECK({status_check}),
+                    response_type TEXT DEFAULT '{ResponseType.NORMAL}' CHECK({response_type_check}),
                     status_code INTEGER,
                     duration_ms INTEGER,
                     request_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     error_message TEXT,
                     retry_count INTEGER DEFAULT 0,
-                    retry_type TEXT DEFAULT 'initial',
+                    retry_type TEXT DEFAULT '{RetryType.INITIAL}',
                     request_data TEXT,
                     response_size INTEGER,
-                    FOREIGN KEY (key_id) REFERENCES tokens(id)
+                    FOREIGN KEY (key_id) REFERENCES {DatabaseConstants.TOKENS_TABLE}(id)
                 )
             """)
 
             # 索引优化
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tokens_status ON tokens(status)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tokens_token_hash ON tokens(token_hash)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tokens_created_at ON tokens(created_at)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_proxy_logs_status ON proxy_request_logs(status)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_proxy_logs_timestamp ON proxy_request_logs(request_timestamp)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_proxy_logs_key_id ON proxy_request_logs(key_id)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.TOKENS_TABLE}_status ON {DatabaseConstants.TOKENS_TABLE}(status)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.TOKENS_TABLE}_token_hash ON {DatabaseConstants.TOKENS_TABLE}(token_hash)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.TOKENS_TABLE}_created_at ON {DatabaseConstants.TOKENS_TABLE}(created_at)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}_status ON {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}(status)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}_timestamp ON {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}(request_timestamp)")
+            cursor.execute(f"CREATE INDEX IF NOT EXISTS idx_{DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}_key_id ON {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}(key_id)")
 
             conn.commit()
             self.logger.info("数据库表结构创建/验证完成")
@@ -140,7 +150,7 @@ class DatabaseManager:
         """获取配置值"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT value FROM config WHERE key = ?", (key,))
+            cursor.execute(f"SELECT value FROM {DatabaseConstants.CONFIG_TABLE} WHERE key = ?", (key,))
             row = cursor.fetchone()
             if row:
                 try:
@@ -159,12 +169,16 @@ class DatabaseManager:
                 value_json = str(value)
             
             # 获取本地时区时间
-            local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            cursor.execute("""
-                INSERT OR REPLACE INTO config (key, value, updated_at)
+            local_time = self._get_local_time()
+            cursor.execute(f"""
+                INSERT OR REPLACE INTO {DatabaseConstants.CONFIG_TABLE} (key, value, updated_at)
                 VALUES (?, ?, ?)
             """, (key, value_json, local_time))
             conn.commit()
+
+    def _get_local_time(self) -> str:
+        """获取本地时区时间的通用方法"""
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     
     # 令牌管理方法
     def add_token(self, token_value: str, status: str = 'pending') -> int:
@@ -212,13 +226,13 @@ class DatabaseManager:
     def update_token_status(self, token_id: int, status: str, total_balance: float = None, charge_balance: float = None):
         """更新令牌状态和余额"""
         # 获取本地时区时间
-        local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        local_time = self._get_local_time()
         
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE tokens 
-                SET status = ?, total_balance = ?, charge_balance = ?, 
+            cursor.execute(f"""
+                UPDATE {DatabaseConstants.TOKENS_TABLE}
+                SET status = ?, total_balance = ?, charge_balance = ?,
                     updated_at = ?, last_checked = ?
                 WHERE id = ?
             """, (status, total_balance, charge_balance, local_time, local_time, token_id))
@@ -228,10 +242,10 @@ class DatabaseManager:
         """根据状态获取令牌"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, token_value, status, total_balance, charge_balance, 
+            cursor.execute(f"""
+                SELECT id, token_value, status, total_balance, charge_balance,
                        created_at, updated_at, last_checked
-                FROM tokens WHERE status = ?
+                FROM {DatabaseConstants.TOKENS_TABLE} WHERE status = ?
                 ORDER BY created_at DESC
             """, (status,))
             
@@ -241,15 +255,35 @@ class DatabaseManager:
         """获取待处理的令牌"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT id, token_value, status, created_at
-                FROM tokens 
-                WHERE status = 'pending'
+                FROM {DatabaseConstants.TOKENS_TABLE}
+                WHERE status = ?
                 ORDER BY created_at ASC
                 LIMIT ?
-            """, (limit,))
+            """, (TokenStatus.PENDING, limit))
             
             return [dict(row) for row in cursor.fetchall()]
+    
+    def get_all_tokens(self) -> List[Dict]:
+        """获取所有令牌"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT id, token_value, status, total_balance, charge_balance,
+                       created_at, updated_at, last_checked
+                FROM {DatabaseConstants.TOKENS_TABLE}
+                ORDER BY created_at ASC
+            """)
+            
+            return [dict(row) for row in cursor.fetchall()]
+    
+    def delete_token_by_id(self, token_id: int):
+        """根据ID删除令牌"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM {DatabaseConstants.TOKENS_TABLE} WHERE id = ?", (token_id,))
+            conn.commit()
     
     def get_token_statistics(self) -> Dict:
         """获取令牌统计信息"""
@@ -257,9 +291,9 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             # 获取各状态统计
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT status, COUNT(*) as count
-                FROM tokens
+                FROM {DatabaseConstants.TOKENS_TABLE}
                 GROUP BY status
             """)
             
@@ -270,7 +304,7 @@ class DatabaseManager:
                 }
             
             # 获取总数
-            cursor.execute("SELECT COUNT(*) as total FROM tokens")
+            cursor.execute(f"SELECT COUNT(*) as total FROM {DatabaseConstants.TOKENS_TABLE}")
             total_count = cursor.fetchone()['total']
             
             return {
@@ -282,7 +316,7 @@ class DatabaseManager:
         """根据状态删除令牌"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM tokens WHERE status = ?", (status,))
+            cursor.execute(f"DELETE FROM {DatabaseConstants.TOKENS_TABLE} WHERE status = ?", (status,))
             deleted_count = cursor.rowcount
             conn.commit()
             return deleted_count
@@ -299,13 +333,13 @@ class DatabaseManager:
             if status_filter:
                 placeholders = ','.join(['?' for _ in status_filter])
                 cursor.execute(f"""
-                    SELECT token_value FROM tokens 
+                    SELECT token_value FROM {DatabaseConstants.TOKENS_TABLE}
                     WHERE status IN ({placeholders})
                     ORDER BY token_value
                 """, status_filter)
             else:
-                cursor.execute("""
-                    SELECT token_value FROM tokens 
+                cursor.execute(f"""
+                    SELECT token_value FROM {DatabaseConstants.TOKENS_TABLE}
                     ORDER BY token_value
                 """)
             
@@ -318,8 +352,8 @@ class DatabaseManager:
         # 记录导出
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO exports (filter_criteria, token_count, export_path, export_type)
+            cursor.execute(f"""
+                INSERT INTO {DatabaseConstants.EXPORTS_TABLE} (filter_criteria, token_count, export_path, export_type)
                 VALUES (?, ?, ?, 'file')
             """, (json.dumps(status_filter) if status_filter else None, len(tokens), file_path))
             conn.commit()
@@ -331,10 +365,10 @@ class DatabaseManager:
         """创建新的批次"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO batches (batch_name, total_tokens, processed_tokens, status, description)
-                VALUES (?, 0, 0, 'pending', ?)
-            """, (batch_name, description))
+            cursor.execute(f"""
+                INSERT INTO {DatabaseConstants.BATCHES_TABLE} (batch_name, total_tokens, processed_tokens, status, description)
+                VALUES (?, 0, 0, ?, ?)
+            """, (batch_name, TokenStatus.PENDING, description))
             conn.commit()
             return cursor.lastrowid
     
@@ -344,19 +378,19 @@ class DatabaseManager:
             cursor = conn.cursor()
             
             # 获取本地时区时间
-            local_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            local_time = self._get_local_time()
             
             if processed_tokens is not None:
-                cursor.execute("""
-                    UPDATE batches 
-                    SET status = ?, processed_tokens = ?, 
+                cursor.execute(f"""
+                    UPDATE {DatabaseConstants.BATCHES_TABLE}
+                    SET status = ?, processed_tokens = ?,
                         completed_at = CASE WHEN ? = 'completed' THEN ? ELSE NULL END
                     WHERE id = ?
                 """, (status, processed_tokens, status, local_time, batch_id))
             else:
-                cursor.execute("""
-                    UPDATE batches 
-                    SET status = ?, 
+                cursor.execute(f"""
+                    UPDATE {DatabaseConstants.BATCHES_TABLE}
+                    SET status = ?,
                         completed_at = CASE WHEN ? = 'completed' THEN ? ELSE NULL END
                     WHERE id = ?
                 """, (status, status, local_time, batch_id))
@@ -367,10 +401,10 @@ class DatabaseManager:
         """获取所有批次信息"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT id, batch_name, total_tokens, processed_tokens, status,
                        created_at, completed_at, description
-                FROM batches
+                FROM {DatabaseConstants.BATCHES_TABLE}
                 ORDER BY created_at DESC
             """)
 
@@ -378,15 +412,18 @@ class DatabaseManager:
 
     # 代理请求日志管理方法
     def add_proxy_request_log(self, key_id: int, token_value: str, endpoint: str, method: str,
-                            status: str, response_type: str = '普通响应', status_code: int = None,
+                            status: str, response_type: str = None, status_code: int = None,
                             duration_ms: int = None, model: str = None, error_message: str = None,
-                            retry_count: int = 0, retry_type: str = 'initial',
+                            retry_count: int = 0, retry_type: str = None,
                             request_data: str = None, response_size: int = None) -> int:
         """添加代理请求日志"""
+        response_type = response_type or ResponseType.NORMAL
+        retry_type = retry_type or RetryType.INITIAL
+        
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO proxy_request_logs
+            cursor.execute(f"""
+                INSERT INTO {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 (key_id, token_value, endpoint, method, model, status, response_type,
                  status_code, duration_ms, error_message, retry_count, retry_type,
                  request_data, response_size)
@@ -405,8 +442,8 @@ class DatabaseManager:
         """更新代理请求日志状态"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE proxy_request_logs
+            cursor.execute(f"""
+                UPDATE {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 SET status = ?, status_code = ?, duration_ms = ?,
                     error_message = ?, response_size = ?
                 WHERE id = ?
@@ -420,36 +457,36 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             # 总体统计
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT
                     COUNT(*) as total_requests,
-                    COUNT(CASE WHEN status = '成功' THEN 1 END) as successful_requests,
-                    COUNT(CASE WHEN status = '失败' THEN 1 END) as failed_requests,
-                    COUNT(CASE WHEN status = '请求中' THEN 1 END) as pending_requests,
-                    COUNT(CASE WHEN response_type = '流式响应' THEN 1 END) as streaming_requests,
+                    COUNT(CASE WHEN status = ? THEN 1 END) as successful_requests,
+                    COUNT(CASE WHEN status = ? THEN 1 END) as failed_requests,
+                    COUNT(CASE WHEN status = ? THEN 1 END) as pending_requests,
+                    COUNT(CASE WHEN response_type = ? THEN 1 END) as streaming_requests,
                     AVG(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END) as avg_duration_ms,
                     MAX(CASE WHEN duration_ms IS NOT NULL THEN duration_ms END) as max_duration_ms
-                FROM proxy_request_logs
-            """)
+                FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
+            """, (ProxyRequestStatus.SUCCESS, ProxyRequestStatus.FAILED, ProxyRequestStatus.PENDING, ResponseType.STREAMING))
 
             overall_stats = dict(cursor.fetchone())
 
             # 今天统计
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT
                     COUNT(*) as today_requests,
-                    COUNT(CASE WHEN status = '成功' THEN 1 END) as today_successful,
-                    COUNT(CASE WHEN status = '失败' THEN 1 END) as today_failed
-                FROM proxy_request_logs
+                    COUNT(CASE WHEN status = ? THEN 1 END) as today_successful,
+                    COUNT(CASE WHEN status = ? THEN 1 END) as today_failed
+                FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 WHERE DATE(request_timestamp) = DATE('now', 'localtime')
-            """)
+            """, (ProxyRequestStatus.SUCCESS, ProxyRequestStatus.FAILED))
 
             today_stats = dict(cursor.fetchone())
 
             # 按状态统计
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT status, COUNT(*) as count
-                FROM proxy_request_logs
+                FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 GROUP BY status
             """)
 
@@ -461,12 +498,13 @@ class DatabaseManager:
                 'status_counts': status_counts
             }
 
-    def clear_proxy_request_logs(self, days_to_keep: int = 30) -> int:
+    def clear_proxy_request_logs(self, days_to_keep: int = None) -> int:
         """清理指定天数前的代理请求日志"""
+        days_to_keep = days_to_keep or DatabaseConstants.DEFAULT_LOG_RETENTION_DAYS
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                DELETE FROM proxy_request_logs
+            cursor.execute(f"""
+                DELETE FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 WHERE request_timestamp < datetime('now', 'localtime', ?)
             """, (f'-{days_to_keep} days',))
 
@@ -526,7 +564,7 @@ class DatabaseManager:
                     SELECT id, key_id, token_value, endpoint, method, model, status,
                            response_type, status_code, duration_ms, request_timestamp,
                            error_message, retry_count, retry_type, request_data, response_size
-                    FROM proxy_request_logs
+                    FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                     WHERE {where_clause}
                     {order_clause}
                     LIMIT ? OFFSET ?
@@ -536,7 +574,7 @@ class DatabaseManager:
                     SELECT key_id, token_value, endpoint, method, model, status,
                            response_type, status_code, duration_ms, request_timestamp,
                            error_message, retry_count, retry_type, request_data, response_size
-                    FROM proxy_request_logs
+                    FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                     WHERE {where_clause}
                     {order_clause}
                     LIMIT ? OFFSET ?
@@ -566,7 +604,7 @@ class DatabaseManager:
 
             where_clause = " AND ".join(conditions) if conditions else "1=1"
 
-            cursor.execute(f"SELECT COUNT(*) as count FROM proxy_request_logs WHERE {where_clause}", params)
+            cursor.execute(f"SELECT COUNT(*) as count FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE} WHERE {where_clause}", params)
             result = cursor.fetchone()
             return result['count'] if result else 0
 
@@ -576,8 +614,8 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             # 首先获取要删除的记录ID
-            cursor.execute("""
-                SELECT id FROM proxy_request_logs
+            cursor.execute(f"""
+                SELECT id FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 ORDER BY request_timestamp ASC
                 LIMIT ?
             """, (count,))
@@ -589,7 +627,7 @@ class DatabaseManager:
 
             # 删除这些记录
             placeholders = ','.join(['?' for _ in ids_to_delete])
-            cursor.execute(f"DELETE FROM proxy_request_logs WHERE id IN ({placeholders})", ids_to_delete)
+            cursor.execute(f"DELETE FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE} WHERE id IN ({placeholders})", ids_to_delete)
 
             deleted_count = cursor.rowcount
             conn.commit()
@@ -599,7 +637,7 @@ class DatabaseManager:
         """清空所有代理请求日志"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM proxy_request_logs")
+            cursor.execute(f"DELETE FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}")
             deleted_count = cursor.rowcount
             conn.commit()
             return deleted_count
@@ -623,7 +661,7 @@ class DatabaseManager:
                 SELECT id, key_id, token_value, endpoint, method, model, status,
                        response_type, status_code, duration_ms, request_timestamp,
                        error_message, retry_count, retry_type, request_data, response_size
-                FROM proxy_request_logs
+                FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 WHERE {where_clause}
                 ORDER BY request_timestamp DESC
             """, params)
@@ -640,8 +678,8 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             # 使用模糊匹配来提高删除成功率
-            cursor.execute("""
-                DELETE FROM proxy_request_logs
+            cursor.execute(f"""
+                DELETE FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE}
                 WHERE request_timestamp = ? AND token_value = ? AND endpoint = ?
             """, (request_timestamp, token_value, endpoint))
 
@@ -658,7 +696,7 @@ class DatabaseManager:
             cursor = conn.cursor()
 
             placeholders = ','.join(['?' for _ in ids])
-            cursor.execute(f"DELETE FROM proxy_request_logs WHERE id IN ({placeholders})", ids)
+            cursor.execute(f"DELETE FROM {DatabaseConstants.PROXY_REQUEST_LOGS_TABLE} WHERE id IN ({placeholders})", ids)
 
             deleted_count = cursor.rowcount
             conn.commit()

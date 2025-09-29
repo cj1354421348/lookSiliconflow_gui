@@ -13,8 +13,13 @@ import hashlib
 import queue
 import uuid
 
-from database_manager import DatabaseManager
-from config_manager import ConfigManager
+from src.database_manager import DatabaseManager
+from src.config_manager import ConfigManager
+from src.constants import (
+    KeyPoolTypes, TokenStatus, ProxyRequestStatus, ResponseType,
+    RetryType, ProxyConstants, NetworkConstants, ErrorMessages,
+    HTTPStatus, TimeConstants
+)
 
 
 class KeyPool:
@@ -27,10 +32,10 @@ class KeyPool:
 
         # 按状态分类的密钥池
         self.key_pools = {
-            "non_blacklist": [],      # 非黑名单（有效的和充值余额的）
-            "available_balance": [],   # 可用余额
-            "gift_balance": [],        # 赠金
-            "unavailable_balance": []  # 不可用余额
+            KeyPoolTypes.NON_BLACKLIST: [],      # 非黑名单（有效的和充值余额的）
+            KeyPoolTypes.AVAILABLE_BALANCE: [],   # 可用余额
+            KeyPoolTypes.GIFT_BALANCE: [],        # 赠金
+            KeyPoolTypes.UNAVAILABLE_BALANCE: []  # 不可用余额
         }
 
         # 密钥状态管理
@@ -48,6 +53,11 @@ class KeyPool:
 
         # 当前选择的池子类型（用户配置）
         self.current_pool_type = self.config_manager.get_proxy_pool_type()
+        
+        # 验证池子类型是否有效
+        if self.current_pool_type not in self.key_pools:
+            self.logger.warning(f"配置的池子类型 {self.current_pool_type} 无效，使用默认类型")
+            self.current_pool_type = ProxyConstants.DEFAULT_POOL_TYPE
 
         # 大重试次数配置
         self.max_big_retries = self.config_manager.get_proxy_max_big_retries()
@@ -71,10 +81,9 @@ class KeyPool:
                 self.small_retry_counts.clear()
 
                 # 获取所有有效的密钥
-                valid_statuses = ["pending", "valid", "low_balance", "charge_balance"]
                 all_keys = []
 
-                for status in valid_statuses:
+                for status in TokenStatus.VALID_STATUSES:
                     keys = self.db_manager.get_tokens_by_status(status)
                     all_keys.extend(keys)
 
@@ -121,20 +130,20 @@ class KeyPool:
 
         # 分类规则
         # 1. 非黑名单池子：有效的和充值余额的
-        if status in ["valid", "charge_balance"] or (status == "low_balance" and charge_balance > 0):
-            self.key_pools["non_blacklist"].append(key)
+        if status in [TokenStatus.VALID, TokenStatus.CHARGE_BALANCE] or (status == TokenStatus.LOW_BALANCE and charge_balance > 0):
+            self.key_pools[KeyPoolTypes.NON_BLACKLIST].append(key)
 
         # 2. 可用余额池子：有可用余额的
         if total_balance > 0:
-            self.key_pools["available_balance"].append(key)
+            self.key_pools[KeyPoolTypes.AVAILABLE_BALANCE].append(key)
 
         # 3. 赠金池子：有赠金的
         if gift_balance > 0:
-            self.key_pools["gift_balance"].append(key)
+            self.key_pools[KeyPoolTypes.GIFT_BALANCE].append(key)
 
         # 4. 不可用余额池子：无余额或余额不足
         if total_balance <= 0:
-            self.key_pools["unavailable_balance"].append(key)
+            self.key_pools[KeyPoolTypes.UNAVAILABLE_BALANCE].append(key)
 
     def get_current_pool(self) -> List[Dict]:
         """获取当前选择的池子"""
@@ -144,7 +153,7 @@ class KeyPool:
         """设置当前使用的池子类型"""
         if pool_type in self.key_pools:
             self.current_pool_type = pool_type
-            self.config_manager.set("proxy.pool_type", pool_type)
+            self.config_manager.set_proxy_pool_type(pool_type)
             self.logger.info(f"切换到池子类型: {pool_type}")
         else:
             self.logger.error(f"不支持的池子类型: {pool_type}")
@@ -333,11 +342,28 @@ class KeyPool:
 
     def get_pool_status(self) -> Dict:
         """获取密钥池状态"""
-        return {
-            "total_keys": len(self.active_keys),
-            "current_index": self.current_key_index,
-            "failure_counts": dict(self.key_failure_counts)
-        }
+        with self.lock:
+            status = {
+                "current_pool_type": self.current_pool_type,
+                "pool_sizes": {name: len(keys) for name, keys in self.key_pools.items()},
+                "last_used_key": self.last_used_key['id'] if self.last_used_key else None,
+                "last_used_time": self.last_used_time,
+                "key_debounce_interval": self.key_debounce_interval,
+                "max_small_retries": self.max_small_retries,
+                "small_retry_counts": dict(self.small_retry_counts)
+            }
+
+            # 添加池子详情
+            for pool_name, keys in self.key_pools.items():
+                if keys:
+                    status[f"{pool_name}_details"] = [{
+                        "id": key["id"],
+                        "status": key.get("status", "unknown"),
+                        "total_balance": key.get("total_balance", 0),
+                        "charge_balance": key.get("charge_balance", 0)
+                    } for key in keys[:5]]  # 只显示前5个
+
+            return status
 
 
 class RequestLog:
@@ -351,10 +377,12 @@ class RequestLog:
     def log_request(self, key_id: int, endpoint: str, method: str,
                    status_code: int, duration: float, success: bool,
                    error_message: str = "", retry_count: int = 0,
-                   retry_type: str = "initial", model: str = None,
-                   response_type: str = "普通响应", request_data: str = None,
+                   retry_type: str = None, model: str = None,
+                   response_type: str = None, request_data: str = None,
                    response_size: int = None, token_value: str = None):
         """记录增强的请求日志（控制台 + 数据库）"""
+        retry_type = retry_type or RetryType.INITIAL
+        response_type = response_type or ResponseType.NORMAL
         try:
             # 获取key的详细状态信息
             key_usage_stats = self.key_pool.get_key_usage_stats(key_id)
@@ -419,11 +447,11 @@ class RequestLog:
             try:
                 # 确定状态文本
                 if success:
-                    status_text = "成功"
-                elif retry_count > 0 and retry_type == "initial":
-                    status_text = "请求中"  # 如果是第一次失败但会重试，算作请求中
+                    status_text = ProxyRequestStatus.SUCCESS
+                elif retry_count > 0 and retry_type == RetryType.INITIAL:
+                    status_text = ProxyRequestStatus.PENDING  # 如果是第一次失败但会重试，算作请求中
                 else:
-                    status_text = "失败"
+                    status_text = ProxyRequestStatus.FAILED
 
                 # 记录到数据库
                 self.db_manager.add_proxy_request_log(
@@ -452,7 +480,7 @@ class RequestLog:
                 failure_count = usage_data.get('failure_count', 0)
                 total = success_count + failure_count
 
-                if total >= 3 and failure_count / total > 0.5:
+                if total >= 3 and failure_count / total > NetworkConstants.FAILURE_RATE_THRESHOLD:
                     self.logger.warning(f"🔥 Key[{key_id}] 失败率偏高的提示: {failure_count}/{total} ({failure_count/total:.1%})")
 
         except Exception as e:
@@ -467,7 +495,7 @@ class RequestLog:
             pool_sizes = pool_status.get("pool_sizes", {})
             last_used_key = pool_status.get("last_used_key")
             last_used_time = pool_status.get("last_used_time", 0)
-            debounce_interval = self.key_debounce_interval
+            debounce_interval = self.key_pool.key_debounce_interval
 
             # 计算最后使用时间间隔
             time_diff = time.time() - last_used_time if last_used_time > 0 else 0
@@ -533,7 +561,7 @@ class ProxyServer:
         """解析上游API错误信息，根据xy.md格式规范"""
         try:
             # 根据参考文件xy.md的格式规范解析错误
-            if status_code in [400, 429, 503]:
+            if status_code in [HTTPStatus.BAD_REQUEST, HTTPStatus.TOO_MANY_REQUESTS, HTTPStatus.SERVICE_UNAVAILABLE]:
                 # 这些状态码返回JSON格式: {"message": "<string>"}
                 try:
                     error_data = json.loads(response_text)
@@ -542,27 +570,27 @@ class ProxyServer:
                         return f"{{{status_code}: {error_data['message']}}}"
                     else:
                         # 格式不符合预期，显示原始内容
-                        return f"{{{status_code}: {response_text[:500]}}}"
+                        return f"{{{status_code}: {response_text[:ProxyConstants.MAX_ERROR_MESSAGE_LENGTH]}}}"
                 except json.JSONDecodeError:
                     # JSON解析失败，显示原始内容
-                    return f"{{{status_code}: {response_text[:500]}}}"
+                    return f"{{{status_code}: {response_text[:ProxyConstants.MAX_ERROR_MESSAGE_LENGTH]}}}"
 
-            elif status_code in [401, 404, 504]:
+            elif status_code in [HTTPStatus.UNAUTHORIZED, HTTPStatus.NOT_FOUND, HTTPStatus.GATEWAY_TIMEOUT]:
                 # 这些状态码返回字符串格式: "string"
                 if len(response_text.strip()) > 0:
-                    # 如果有内容，显示前500个字符
+                    # 如果有内容，显示前指定长度的字符
                     error_content = response_text.strip()
-                    if len(error_content) > 500:
-                        error_content = error_content[:500] + "..."
+                    if len(error_content) > ProxyConstants.MAX_ERROR_MESSAGE_LENGTH:
+                        error_content = error_content[:ProxyConstants.MAX_ERROR_MESSAGE_LENGTH] + "..."
                     return f"{{{status_code}: {error_content}}}"
                 else:
                     return f"{{{status_code}: 空错误响应}}"
 
             else:
-                # 其他状态码，显示原始响应内容前500个字符
+                # 其他状态码，显示原始响应内容前指定长度的字符
                 error_content = response_text.strip()
-                if len(error_content) > 500:
-                    error_content = error_content[:500] + "..."
+                if len(error_content) > ProxyConstants.MAX_ERROR_MESSAGE_LENGTH:
+                    error_content = error_content[:ProxyConstants.MAX_ERROR_MESSAGE_LENGTH] + "..."
                 return f"{{{status_code}: {error_content}}}"
 
         except Exception as e:
@@ -593,10 +621,10 @@ class ProxyServer:
                 data_json = json.loads(data_str)
                 # 检查是否有stream参数
                 if data_json.get('stream', False):
-                    return '流式响应'
-            return '普通响应'
+                    return ResponseType.STREAMING
+            return ResponseType.NORMAL
         except Exception:
-            return '普通响应'
+            return ResponseType.NORMAL
 
     def _setup_logger(self) -> logging.Logger:
         """设置日志记录器"""
@@ -626,7 +654,8 @@ class ProxyServer:
 
         try:
             # 导入Flask（延迟导入，避免依赖问题）
-            from flask import Flask, request, jsonify, Response
+            from flask import Flask, request, Response
+            from flask import jsonify
             import requests
 
             self.app = Flask(__name__)
@@ -680,6 +709,7 @@ class ProxyServer:
         # 健康检查
         @self.app.route('/health')
         def health_check():
+            from flask import jsonify
             return jsonify({
                 "status": "healthy",
                 "timestamp": datetime.now().astimezone().isoformat(),
@@ -689,6 +719,7 @@ class ProxyServer:
         # 状态信息
         @self.app.route('/status')
         def status():
+            from flask import jsonify
             # 记录密钥池状态到日志
             self.request_log.log_key_pool_status("代理服务器状态查询")
             return jsonify({
@@ -701,6 +732,7 @@ class ProxyServer:
         # 设置池子类型
         @self.app.route('/set_pool_type/<pool_type>', methods=['POST'])
         def set_pool_type(pool_type):
+            from flask import jsonify
             result = self.key_pool.set_pool_type(pool_type)
             return jsonify({
                 "success": result,
@@ -711,6 +743,7 @@ class ProxyServer:
         # 获取池子类型信息
         @self.app.route('/pool_info')
         def pool_info():
+            from flask import jsonify
             return jsonify({
                 "available_pool_types": list(self.key_pool.key_pools.keys()),
                 "current_pool_type": self.key_pool.current_pool_type,
@@ -771,8 +804,8 @@ class ProxyServer:
                     self.logger.info(f"执行大重试，切换到新密钥 ID: {api_key['id']}")
 
             if not api_key:
-                self.logger.error("没有可用的API密钥")
-                return jsonify({"error": "No available API keys"}), 503
+                self.logger.error(ErrorMessages.NO_AVAILABLE_KEYS)
+                return jsonify({"error": ErrorMessages.NO_AVAILABLE_KEYS}), HTTPStatus.SERVICE_UNAVAILABLE
 
             current_key_id = api_key['id']
             current_key_value = api_key['token_value']
@@ -802,8 +835,8 @@ class ProxyServer:
             response_type = current_response_type
             request_data_str = current_request_data
 
-            # 只显示API密钥的前12位，保护密钥安全
-            key_display = key_value[:12] if len(key_value) > 12 else key_value
+            # 只显示API密钥的前指定位数，保护密钥安全
+            key_display = key_value[:ProxyConstants.TOKEN_DISPLAY_LENGTH] if len(key_value) > ProxyConstants.TOKEN_DISPLAY_LENGTH else key_value
             self.logger.info(f"代理请求: {method} {target_url} 使用密钥: {key_display} (尝试 #{retry_count})")
 
             try:
@@ -855,13 +888,13 @@ class ProxyServer:
                     token_value=key_value
                 )
 
-                # 只显示API密钥的前12位，保护密钥安全
-                key_display = key_value[:12] if len(key_value) > 12 else key_value
+                # 只显示API密钥的前指定位数，保护密钥安全
+                key_display = key_value[:ProxyConstants.TOKEN_DISPLAY_LENGTH] if len(key_value) > ProxyConstants.TOKEN_DISPLAY_LENGTH else key_value
                 self.logger.info(f"请求成功，使用密钥: {key_display}，状态码: {response.status_code}，耗时: {duration:.2f}s")
 
                 # 返回响应
                 return Response(
-                    response.iter_content(chunk_size=1024),
+                    response.iter_content(chunk_size=NetworkConstants.CHUNK_SIZE),
                     status=response.status_code,
                     headers=dict(response.headers)
                 )
@@ -898,13 +931,13 @@ class ProxyServer:
 
         duration = time.time() - start_time
 
-        error_msg = f"所有重试都失败了 (共 {retry_count-1} 次)"
+        error_msg = ErrorMessages.ALL_RETRIES_FAILED.replace("(共", f"(共 {retry_count-1} 次)")
         self.logger.error(error_msg)
 
         # 记录最终失败
         if current_key_id:
             last_api_key = getattr(self.key_pool, 'last_used_key', None)
-            retry_type = "initial" if retry_count == 1 else ("small_retry" if last_api_key and 'id' in last_api_key and last_api_key['id'] == current_key_id else "big_retry")
+            retry_type = RetryType.INITIAL if retry_count == 1 else (RetryType.SMALL_RETRY if last_api_key and 'id' in last_api_key and last_api_key['id'] == current_key_id else RetryType.BIG_RETRY)
 
             self.request_log.log_request(
                 key_id=current_key_id,
@@ -965,8 +998,9 @@ class ProxyServer:
 
 
 # 用于测试的简单启动函数
-def run_proxy_server(port: int = 8080):
+def run_proxy_server(port: int = None):
     """运行代理服务器的便捷函数"""
+    port = port or ProxyConstants.DEFAULT_PORT
     db_manager = DatabaseManager()
     config_manager = ConfigManager(db_manager)
 

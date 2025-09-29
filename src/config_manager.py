@@ -2,6 +2,10 @@ import json
 import os
 from typing import Dict, Any, Optional
 from src.database_manager import DatabaseManager
+from src.constants import (
+    APIConstants, ThreadingConstants, UIConstants, ExportConstants,
+    ProxyConstants, DatabaseConstants, TokenStatus, KeyPoolTypes
+)
 
 class ConfigManager:
     """配置管理器 - 从旧配置文件迁移到新数据库系统"""
@@ -15,39 +19,46 @@ class ConfigManager:
         """获取默认配置"""
         return {
             "api": {
-                "endpoint": "https://api.siliconflow.cn/v1/user/info",
-                "timeout": 10
+                "endpoint": APIConstants.DEFAULT_ENDPOINT,
+                "timeout": APIConstants.DEFAULT_TIMEOUT
             },
             "balance_threshold": {
-                "valid": 0.1,
-                "low_balance": 0.0
+                "valid": APIConstants.VALID_BALANCE_THRESHOLD,
+                "low_balance": APIConstants.LOW_BALANCE_THRESHOLD
             },
             "threading": {
                 "enabled": True,
-                "max_workers": 10,
-                "batch_size": 20
+                "max_workers": ThreadingConstants.DEFAULT_MAX_WORKERS,
+                "batch_size": ThreadingConstants.DEFAULT_BATCH_SIZE
             },
             "ui": {
-                "theme": "light",
-                "window_size": {"width": 1000, "height": 700},
+                "theme": UIConstants.DEFAULT_THEME,
+                "window_size": {
+                    "width": UIConstants.DEFAULT_WINDOW_WIDTH,
+                    "height": UIConstants.DEFAULT_WINDOW_HEIGHT
+                },
                 "auto_refresh": True,
-                "refresh_interval": 5,
+                "refresh_interval": UIConstants.DEFAULT_REFRESH_INTERVAL,
                 "debug_mode": False
             },
             "export": {
-                "default_directory": "exports",
-                "filename_template": "{status}_tokens_{date}.txt"
+                "default_directory": ExportConstants.DEFAULT_DIRECTORY,
+                "filename_template": ExportConstants.DEFAULT_FILENAME_TEMPLATE
             },
             "proxy": {
-                "port": 8080,
-                "timeout": 30,
-                "max_failures": 3,
+                "port": ProxyConstants.DEFAULT_PORT,
+                "timeout": ProxyConstants.DEFAULT_TIMEOUT,
+                "max_failures": ProxyConstants.DEFAULT_MAX_FAILURES,
                 "enabled": False,
-                "pool_type": "non_blacklist",
-                "key_debounce_interval": 600,
-                "max_small_retries": 3,
-                "max_big_retries": 5,
-                "request_timeout_minutes": 15
+                "pool_type": ProxyConstants.DEFAULT_POOL_TYPE,
+                "key_debounce_interval": ProxyConstants.DEFAULT_KEY_DEBOUNCE_INTERVAL,
+                "max_small_retries": ProxyConstants.DEFAULT_MAX_SMALL_RETRIES,
+                "max_big_retries": ProxyConstants.DEFAULT_MAX_BIG_RETRIES,
+                "request_timeout_minutes": ProxyConstants.DEFAULT_REQUEST_TIMEOUT_MINUTES
+            },
+            "database": {
+                "path": DatabaseConstants.DEFAULT_DB_PATH,
+                "log_retention_days": DatabaseConstants.DEFAULT_LOG_RETENTION_DAYS
             }
         }
     
@@ -256,6 +267,27 @@ class ConfigManager:
         proxy_config["request_timeout_minutes"] = timeout_minutes
         self.set("proxy", proxy_config)
 
+    # 数据库配置方法
+    def get_database_path(self) -> str:
+        """获取数据库路径"""
+        return self.get("database.path", self.default_config["database"]["path"])
+
+    def set_database_path(self, path: str):
+        """设置数据库路径"""
+        db_config = self.get("database", self.default_config["database"])
+        db_config["path"] = path
+        self.set("database", db_config)
+
+    def get_log_retention_days(self) -> int:
+        """获取日志保留天数"""
+        return self.get("database.log_retention_days", self.default_config["database"]["log_retention_days"])
+
+    def set_log_retention_days(self, days: int):
+        """设置日志保留天数"""
+        db_config = self.get("database", self.default_config["database"])
+        db_config["log_retention_days"] = days
+        self.set("database", db_config)
+
     def get_proxy_max_total_retries(self) -> int:
         """计算代理总重试次数（小重试 * 大重试）"""
         small_retries = self.get_proxy_max_small_retries()
@@ -301,6 +333,10 @@ class ConfigManager:
                 "max_small_retries": self.get_proxy_max_small_retries(),
                 "max_big_retries": self.get_proxy_max_big_retries(),
                 "request_timeout_minutes": self.get_proxy_request_timeout_minutes()
+            },
+            "database": {
+                "path": self.get_database_path(),
+                "log_retention_days": self.get_log_retention_days()
             }
         }
         

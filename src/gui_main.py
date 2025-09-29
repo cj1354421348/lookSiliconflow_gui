@@ -8,14 +8,19 @@ from datetime import datetime
 import json
 import hashlib
 
-from database_manager import DatabaseManager
-from config_manager import ConfigManager
-from token_query_service import TokenQueryService
-from settings_dialog import SettingsDialog
-from export_dialog import ExportDialog
-from proxy_settings_dialog import ProxySettingsDialog
-from proxy_logs_dialog import ProxyLogsDialog
-from log_manager import LogManager
+from src.database_manager import DatabaseManager
+from src.config_manager import ConfigManager
+from src.token_query_service import TokenQueryService
+from src.settings_dialog import SettingsDialog
+from src.export_dialog import ExportDialog
+from src.proxy_settings_dialog import ProxySettingsDialog
+from src.proxy_logs_dialog import ProxyLogsDialog
+from src.log_manager import LogManager
+from src.constants import (
+    UIConstants, WindowConstants, FileConstants, TokenStatus,
+    TimeConstants, ErrorMessages, DatabaseConstants, ProxyConstants,
+    KeyPoolTypes, SortConstants
+)
 
 # 延迟导入代理服务器，避免Flask依赖问题
 try:
@@ -32,9 +37,12 @@ class TokenManagerGUI:
         # 初始化日志管理器
         self.log_manager = LogManager(debug_mode=False)
         
-        # 初始化核心组件
+        # 初始化核心组件 - 使用默认路径避免循环依赖
+        # 1. 先创建DatabaseManager使用默认路径
         self.db_manager = DatabaseManager()
+        # 2. 用这个DatabaseManager创建ConfigManager
         self.config_manager = ConfigManager(self.db_manager)
+        # 3. 创建查询服务
         self.query_service = TokenQueryService(self.db_manager, self.config_manager, self.log_manager)
 
         # 存储令牌数据用于右键菜单
@@ -60,8 +68,8 @@ class TokenManagerGUI:
                 self.log_message(f"初始化代理服务器失败: {e}")
         
         # 排序状态
-        self._sort_column = "最后检查"  # 默认按最后检查时间排序
-        self._sort_direction = True  # True为降序 (新到旧)
+        self._sort_column = SortConstants.DEFAULT_SORT_COLUMN  # 默认排序列
+        self._sort_direction = SortConstants.DEFAULT_SORT_DIRECTION  # 默认排序方向
         
         # 启动自动刷新
         self.auto_refresh_enabled = self.config_manager.is_auto_refresh_enabled()
@@ -75,7 +83,7 @@ class TokenManagerGUI:
         """设置窗口属性"""
         window_size = self.config_manager.get_window_size()
         self.root.geometry(f"{window_size['width']}x{window_size['height']}")
-        self.root.minsize(800, 600)
+        self.root.minsize(WindowConstants.MIN_WINDOW_WIDTH, WindowConstants.MIN_WINDOW_HEIGHT)
         
         # 设置窗口图标
         try:
@@ -246,7 +254,7 @@ class TokenManagerGUI:
         
         # 状态选择和搜索
         ttk.Label(list_frame, text="状态筛选:").grid(row=0, column=0, sticky=tk.W, padx=(0, 5))
-        self.status_filter = ttk.Combobox(list_frame, values=["全部", "pending", "valid", "low_balance", "charge_balance", "invalid"], width=15)
+        self.status_filter = ttk.Combobox(list_frame, values=["全部"] + TokenStatus.VALID_STATUSES, width=15)
         self.status_filter.set("全部")
         self.status_filter.grid(row=0, column=1, sticky=tk.W, padx=(0, 10))
         self.status_filter.bind("<<ComboboxSelected>>", self.filter_tokens)
@@ -295,7 +303,7 @@ class TokenManagerGUI:
         """选择输入文件"""
         file_paths = filedialog.askopenfilenames(
             title="选择令牌文件（可多选）",
-            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+            filetypes=[FileConstants.TEXT_FILES[0], FileConstants.ALL_FILES[0]]
         )
         if file_paths:
             # 如果选择了多个文件，用分号连接显示
@@ -422,23 +430,34 @@ class TokenManagerGUI:
         def reset_status():
             self.processing_status_label.config(text="就绪", foreground="green")
         
-        self.root.after(3000, reset_status)
+        self.root.after(TimeConstants.STATUS_RESET_DELAY, reset_status)
     
     def update_requery_result(self, result):
         """更新重新请求结果"""
         self.process_button.config(state=tk.NORMAL)
         self.stop_button.config(state=tk.DISABLED)
         
-        # 统计结果
-        processed_count = len(result) if isinstance(result, list) else 0
-        successful_count = sum(1 for r in result if isinstance(r, dict) and r.get("success")) if isinstance(result, list) else 0
+        # 统计结果（去重处理）
+        unique_token_ids = set()
+        unique_results = []
+        
+        if isinstance(result, list):
+            for r in result:
+                if isinstance(r, dict) and "token_id" in r:
+                    token_id = r["token_id"]
+                    if token_id not in unique_token_ids:
+                        unique_token_ids.add(token_id)
+                        unique_results.append(r)
+        
+        processed_count = len(unique_results)
+        successful_count = sum(1 for r in unique_results if isinstance(r, dict) and r.get("success")) if isinstance(unique_results, list) else 0
         failed_count = processed_count - successful_count
         
         # 显示重新请求结束提示
         if processed_count > 0:
             self.processing_status_label.config(text="重新请求完成", foreground="green")
             self.log_manager.log_user(f"重新请求完成: 总计 {processed_count} 个令牌，成功 {successful_count} 个，失败 {failed_count} 个")
-            messagebox.showinfo("重新请求完成", 
+            messagebox.showinfo("重新请求完成",
                 f"重新请求完成: 总计 {processed_count} 个令牌，成功 {successful_count} 个，失败 {failed_count} 个")
         else:
             self.processing_status_label.config(text="无需重新请求", foreground="green")
@@ -451,7 +470,7 @@ class TokenManagerGUI:
         def reset_requery_status():
             self.processing_status_label.config(text="就绪", foreground="green")
         
-        self.root.after(3000, reset_requery_status)
+        self.root.after(TimeConstants.STATUS_RESET_DELAY, reset_requery_status)
     
     def refresh_data(self):
         """刷新数据显示"""
@@ -467,7 +486,7 @@ class TokenManagerGUI:
         self.status_labels["total"].config(text=str(stats["total_count"]))
         
         # 更新各状态数量，如果没有该状态则显示0
-        all_status_keys = ["pending", "valid", "low_balance", "charge_balance", "invalid"]
+        all_status_keys = TokenStatus.VALID_STATUSES
         for status_key in all_status_keys:
             if status_key in self.status_labels:
                 count = stats["by_status"].get(status_key, {}).get("count", 0)
@@ -529,7 +548,7 @@ class TokenManagerGUI:
         # 获取令牌数据
         if selected_status == "全部":
             tokens = []
-            for status in ["pending", "valid", "low_balance", "charge_balance", "invalid"]:
+            for status in TokenStatus.VALID_STATUSES:
                 tokens.extend(self.db_manager.get_tokens_by_status(status))
         else:
             tokens = self.db_manager.get_tokens_by_status(selected_status)
@@ -545,13 +564,7 @@ class TokenManagerGUI:
             tokens = filtered_tokens
         
         # 根据排序选项排序
-        sort_column_map = {
-            "令牌": "token_value",
-            "余额": "total_balance",
-            "充值余额": "charge_balance",
-            "最后检查": "last_checked",
-            "创建时间": "created_at" # 新增一个"创建时间"的排序键，以防后面需要
-        }
+        sort_column_map = SortConstants.COLUMN_MAPPING
         
         sort_key_name = sort_column_map.get(self._sort_column, "last_checked")
 
@@ -632,7 +645,7 @@ class TokenManagerGUI:
             self._sort_direction = not self._sort_direction  # 反转排序方向
         else:
             self._sort_column = col
-            self._sort_direction = False  # 默认为降序
+            self._sort_direction = SortConstants.DEFAULT_SORT_DIRECTION  # 默认排序方向
         
         self.update_token_list()
     
@@ -767,8 +780,8 @@ class TokenManagerGUI:
             cleanup_window = tk.Toplevel(self.root)
             cleanup_window.withdraw()  # 隐藏窗口，直到完全准备好
             cleanup_window.title("清理令牌")
-            cleanup_window.geometry("400x300")
-            cleanup_window.minsize(350, 250)
+            cleanup_window.geometry(f"{WindowConstants.CLEANUP_DIALOG_WIDTH}x{WindowConstants.CLEANUP_DIALOG_HEIGHT}")
+            cleanup_window.minsize(WindowConstants.CLEANUP_DIALOG_MIN_WIDTH, WindowConstants.CLEANUP_DIALOG_MIN_HEIGHT)
             
             # 设置对话框图标
             try:
@@ -794,11 +807,11 @@ class TokenManagerGUI:
             # 状态复选框
             status_vars = {}
             status_info = [
-                ("invalid", "无效令牌"),
-                ("low_balance", "余额不足令牌"),
-                ("pending", "待处理令牌"),
-                ("valid", "有效令牌"),
-                ("charge_balance", "充值余额令牌")
+                (TokenStatus.INVALID, "无效令牌"),
+                (TokenStatus.LOW_BALANCE, "余额不足令牌"),
+                (TokenStatus.PENDING, "待处理令牌"),
+                (TokenStatus.VALID, "有效令牌"),
+                (TokenStatus.CHARGE_BALANCE, "充值余额令牌")
             ]
             
             for status, label in status_info:
@@ -881,7 +894,7 @@ class TokenManagerGUI:
             
             # 获取所有令牌（不仅仅是待处理的）
             all_tokens = []
-            for status in ["pending", "valid", "low_balance", "charge_balance", "invalid"]:
+            for status in TokenStatus.VALID_STATUSES:
                 tokens = self.db_manager.get_tokens_by_status(status)
                 all_tokens.extend(tokens)
             
@@ -918,11 +931,7 @@ class TokenManagerGUI:
     def _set_window_icon(self):
         """设置窗口图标（包括Windows任务栏图标）"""
         # 尝试多种路径的图标文件
-        icon_paths = [
-            "icon.ico",           # ICO格式图标
-            "assets/icon.ico",    # 资源目录下的图标
-            "images/icon.ico"
-        ]
+        icon_paths = FileConstants.ICON_PATHS
         
         icon_found = False
         for icon_path in icon_paths:
@@ -990,7 +999,7 @@ class TokenManagerGUI:
                     print(f"任务栏图标设置失败: {e}")
             
             # 延迟执行，确保窗口完全显示
-            self.root.after(200, set_taskbar_icon)
+            self.root.after(TimeConstants.ICON_SET_DELAY, set_taskbar_icon)
             
         except Exception as e:
             print(f"图标设置失败: {e}")
@@ -1013,7 +1022,7 @@ class TokenManagerGUI:
     def start_proxy_server(self):
         """启动代理服务器"""
         if not PROXY_SERVER_AVAILABLE or not self.proxy_server:
-            self.log_message("代理服务器不可用，请安装Flask依赖")
+            self.log_message(ErrorMessages.PROXY_SERVER_UNAVAILABLE)
             return False
 
         if self.proxy_server.is_running:
@@ -1067,7 +1076,7 @@ class TokenManagerGUI:
     def toggle_proxy_server(self):
         """切换代理服务器状态"""
         if not PROXY_SERVER_AVAILABLE or not self.proxy_server:
-            self.log_message("代理服务器不可用，请安装Flask依赖")
+            self.log_message(ErrorMessages.PROXY_SERVER_UNAVAILABLE)
             return
 
         if self.proxy_server.is_running:
@@ -1082,7 +1091,7 @@ class TokenManagerGUI:
     def open_proxy_settings(self):
         """打开代理设置对话框"""
         if not PROXY_SERVER_AVAILABLE:
-            messagebox.showwarning("功能不可用", "请先安装Flask依赖包: pip install flask")
+            messagebox.showwarning("功能不可用", ErrorMessages.PROXY_SERVER_UNAVAILABLE)
             return
 
         dialog = ProxySettingsDialog(self, self.config_manager)
@@ -1139,7 +1148,7 @@ class TokenManagerGUI:
     def open_proxy_logs(self):
         """打开代理日志对话框"""
         if not PROXY_SERVER_AVAILABLE:
-            messagebox.showwarning("功能不可用", "代理功能不可用")
+            messagebox.showwarning("功能不可用", ErrorMessages.PROXY_SERVER_UNAVAILABLE)
             return
 
         try:
