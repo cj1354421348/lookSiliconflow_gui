@@ -1,9 +1,6 @@
 """
-日志管理器模块
-
-实现了线程安全的单例日志管理器，提供统一的日志管理入口。
-支持多种日志器类型，可以动态配置和管理日志器。
-修复了死锁问题，使用完全无锁的读取策略和最小化锁的写入策略。
+LogManager最终修复版本
+使用完全无锁的读取策略和最小化锁的写入策略
 """
 
 import threading
@@ -282,15 +279,8 @@ class LogManager(metaclass=LogManagerMeta):
         with self._config_version_lock:
             self._config_version += 1
         
-        # 先更新根日志器（避免在持有锁的情况下调用外部方法）
-        try:
-            self._root_logger_ref.update_config(config)
-        except Exception as e:
-            # 记录错误但不中断配置更新
-            with self._error_stats_lock:
-                self._error_stats['root_logger_update_failures'] += 1
-            import logging
-            logging.error(f"更新根日志器配置失败: {e}")
+        # 更新根日志器
+        self._root_logger_ref.update_config(config)
         
         # 异步更新所有日志器，避免阻塞
         loggers_to_update = list(self._loggers_immutable.values())

@@ -50,7 +50,7 @@ class AsyncLogHandler:
         self._worker_thread.start()
         
         # 创建刷新线程
-        self._flush_thread = threading.Thread(target=self _periodic_flush, daemon=True)
+        self._flush_thread = threading.Thread(target=self._periodic_flush, daemon=True)
         self._flush_thread.start()
         
         # 输出策略列表

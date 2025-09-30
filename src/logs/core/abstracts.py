@@ -155,6 +155,59 @@ class AbstractLogger(Logger, ABC):
         
         return True
     
+    def log(self, level: LogLevel, message: str, **kwargs) -> None:
+        """记录日志（抽象方法实现）
+        
+        Args:
+            level: 日志级别
+            message: 日志消息
+            **kwargs: 其他参数
+        """
+        # 默认实现：创建日志条目并处理
+        from datetime import datetime
+        import threading
+        
+        # 创建日志条目
+        record = LogEntry(
+            timestamp=datetime.now(),
+            level=level,
+            logger_name=self.name,
+            message=message,
+            thread_id=threading.get_ident(),
+            context=kwargs.get('context'),
+            exception_info=kwargs.get('exception_info')
+        )
+        
+        # 检查是否应该记录
+        if self._should_log(record):
+            # 通知观察者
+            self._notify_observers(record)
+    
+    def flush(self) -> None:
+        """刷新日志缓冲区（抽象方法实现）"""
+        # 默认实现：什么都不做
+        pass
+    
+    def shutdown(self) -> None:
+        """关闭日志器（抽象方法实现）"""
+        # 默认实现：清空观察者和过滤器
+        if self._observers_lock is not None:
+            with self._observers_lock:
+                self._observers.clear()
+        
+        if self._filters_lock is not None:
+            with self._filters_lock:
+                self._filters.clear()
+    
+    def update_config(self, config: 'LogConfig') -> None:
+        """更新日志配置（抽象方法实现）
+        
+        Args:
+            config: 新的日志配置
+        """
+        # 默认实现：什么都不做，子类可以覆盖
+        pass
+    
     def get_logger_info(self) -> Dict[str, Any]:
         """获取日志器信息"""
         return {
